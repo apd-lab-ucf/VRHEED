@@ -1,0 +1,15 @@
+# VRHEED runtime dependencies.  Install with:  pip install -r requirements.txt
+numpy
+scipy
+opencv-python
+PyQt5
+pyqtgraph
+
+# PySpin (FLIR camera driver) is NOT on PyPI.  It ships as a wheel inside the
+# FLIR Spinnaker SDK installer and must be installed from there, matched to
+# your Python version.  It is optional: without it the app starts in
+# file-analysis mode (load recorded videos / traces, no live camera).
+
+# pyinstaller is needed only to build the Windows exe (see build.bat); it is
+# not required to run the app from source.
+# pyinstaller
