@@ -3358,11 +3358,39 @@ class VRHEED_App(QMainWindow):
 # ---------------------------------------------------------------------------
 
 
+def _check() -> int:
+    """Headless start-up check: build the window offscreen and exit.
+
+    Proves a frozen build can actually import numpy/scipy/cv2/PyQt5 and
+    construct the UI -- the failure mode packaging introduces -- without a
+    camera, a display, or the operator's settings file.  The full behavioural
+    smoke test is test_app_smoke.py, which needs the source tree.
+    Used by .github/workflows/build.yml to gate every release binary.
+    """
+    import tempfile
+
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    tmp = tempfile.mkdtemp(prefix="vrheed_check_")
+    os.environ.setdefault("VRHEED_SETTINGS_FILE", os.path.join(tmp, "settings.ini"))
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    app = QApplication([sys.argv[0]])
+    app.setStyle("Fusion")
+    win = VRHEED_App()
+    win.show()
+    app.processEvents()
+    win.close()
+    print(f"PASS: VRHEED {__version__} starts ({platform.system()})", flush=True)
+    return 0
+
+
 if __name__ == "__main__":
     # Logging and the excepthook go in before anything Qt can raise from, so
     # the frozen exe (no console, stderr = None) still leaves a trace.
     _setup_logging()
     _install_excepthook()
+    if "--check" in sys.argv[1:]:
+        sys.exit(_check())
     # Must be set before the QApplication exists, or a 4K/150% Windows display
     # renders the controls at the wrong size.
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)

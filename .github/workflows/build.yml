@@ -1,0 +1,88 @@
+name: Build release binaries
+
+# Runs when a GitHub release is published (Releases → Draft a new release →
+# Publish), or by hand from the Actions tab. Attaches to the release:
+#   VRHEED.exe               the app (Windows, one file)
+#   VRHEED-mac-arm64.zip     the .app for Apple-silicon Macs
+#   VRHEED-mac-intel.zip     the .app for Intel Macs
+# PySpin (the FLIR camera driver) is NOT on PyPI, so these builds start in
+# file-analysis mode: recorded videos and traces, no live camera. For live
+# acquisition run from source in a python that has the Spinnaker SDK wheel.
+# The mac apps are ad-hoc signed (no Developer ID): first launch needs
+# right-click → Open.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Build exe
+        run: pyinstaller --noconfirm main.spec
+      - name: Smoke-test the exe (headless, no camera)
+        shell: pwsh
+        # The exe is GUI-subsystem (console=False), so PowerShell does not wait
+        # on it and $LASTEXITCODE is meaningless — Start-Process -Wait does both.
+        run: |
+          $p = Start-Process -FilePath "dist\VRHEED.exe" -ArgumentList "--check" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/VRHEED.exe
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/VRHEED.exe
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest       # Apple silicon
+            arch: arm64
+          - runner: macos-15-intel     # Intel
+            arch: intel
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Build .app
+        run: pyinstaller --noconfirm main_mac.spec
+      - name: Smoke-test the app (headless, no camera)
+        run: QT_QPA_PLATFORM=offscreen "dist/VRHEED.app/Contents/MacOS/VRHEED" --check
+      - name: Zip the .app (ditto keeps the bundle intact)
+        run: ditto -c -k --keepParent "dist/VRHEED.app" "VRHEED-mac-${{ matrix.arch }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.arch }}
+          path: VRHEED-mac-${{ matrix.arch }}.zip
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VRHEED-mac-${{ matrix.arch }}.zip
