@@ -153,6 +153,30 @@ def test_registry():
           or vc.SpinnakerBackend.available())
 
 
+def test_console_output_is_ascii():
+    """The diagnostic must survive a cp1252 Windows console.
+
+    Its whole job is to be readable when nothing else works, so it must not be
+    the thing that dies on an encoding.  A Windows console is often cp1252 and
+    a redirected stream uses the locale encoding; a stray em dash there is a
+    UnicodeEncodeError, not a mojibake.
+    """
+    import io
+    source = io.open(vc.__file__, encoding="utf-8").read()
+    offenders = sorted({c for c in source if ord(c) > 127})
+    check("vrheed_cameras.py is pure ASCII",
+          not offenders,
+          "".join(f"U+{ord(c):04X} " for c in offenders))
+
+    # Everything the diagnostic prints, through the narrowest encoding there is.
+    printable = [name + reason for name, _ok, reason in vc.backend_status()]
+    printable += [i.label + i.detail for i in vc.enumerate_cameras()]
+    printable += vc.spinnaker_report()
+    bad = [t for t in printable
+           if any(ord(c) > 127 for c in t)]
+    check("every string the diagnostic prints is ASCII", not bad, str(bad[:2]))
+
+
 def test_driver_absent_vs_broken():
     """"Not installed" and "installed but will not load" need different fixes.
 
@@ -748,6 +772,7 @@ def main_():
     app = QApplication.instance() or QApplication(sys.argv)
     _silence_dialogs()
     test_registry()
+    test_console_output_is_ascii()
     test_driver_absent_vs_broken()
     test_spinnaker_report_without_pyspin()
     test_software_binning()

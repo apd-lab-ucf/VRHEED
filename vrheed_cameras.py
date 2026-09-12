@@ -4,7 +4,7 @@ VRHEED started as a FLIR/Spinnaker-only application.  A RHEED screen, though,
 gets imaged by whatever the lab already owns, and that is rarely the same
 camera twice: machine-vision cameras from half a dozen vendors, scientific
 CCD/sCMOS cameras on the high-end systems, an analogue CCD on a USB frame
-grabber on the old ones, and — more often than anyone admits — a webcam
+grabber on the old ones, and - more often than anyone admits - a webcam
 pointed at the phosphor screen.  This module hides all of that behind one
 small interface so the rest of the app never has to know.
 
@@ -24,7 +24,7 @@ Dependencies
 Every third-party driver is imported lazily, inside the backend that needs it.
 Nothing here is a hard requirement: a machine with none of them installed
 still gets the synthetic camera, the OpenCV backends (USB / network), and
-screen capture if ``mss`` is present.  That matters for a public release —
+screen capture if ``mss`` is present.  That matters for a public release -
 users should not have to install a 1 GB vendor SDK to try the analysis on a
 recorded video.
 """
@@ -36,6 +36,7 @@ import os
 import platform
 import importlib
 import re
+import sys
 import threading
 import time
 
@@ -100,7 +101,7 @@ class CameraInfo:
 
     ``key`` is the stable string written to the settings file so the app can
     reconnect to the same camera next session.  It is ``"<backend_id>:<device_id>"``
-    — the device id is a serial number wherever the SDK exposes one, because
+    - the device id is a serial number wherever the SDK exposes one, because
     an index changes the moment somebody unplugs a different camera.
     """
 
@@ -136,7 +137,7 @@ class CameraBackend:
     """Common behaviour for every camera source.
 
     Subclasses override the ``_``-prefixed hooks; the public methods here add
-    the parts that must behave identically whatever the hardware is — mono
+    the parts that must behave identically whatever the hardware is - mono
     conversion, the software-binning fallback, and never raising out of a
     control setter (a camera that lacks a node must not take the UI down).
     """
@@ -144,7 +145,7 @@ class CameraBackend:
     backend_id = "base"
     backend_name = "Camera"
 
-    # Capability flags — the GUI greys out controls the camera cannot honour.
+    # Capability flags - the GUI greys out controls the camera cannot honour.
     supports_gain = False
     supports_exposure = False
     supports_frame_rate = False
@@ -225,7 +226,7 @@ class CameraBackend:
     def get_frame(self, timeout_ms=500):
         """One frame as a 2-D mono array, or ``None`` on timeout.
 
-        Never raises for an ordinary timeout or a single dropped frame — the
+        Never raises for an ordinary timeout or a single dropped frame - the
         capture thread polls this in a tight loop and a live growth must not
         end because one packet went missing.
         """
@@ -243,7 +244,7 @@ class CameraBackend:
         """2-D mono view of whatever the SDK handed back.
 
         Colour sensors are averaged to luminance; a Bayer-raw frame arrives
-        2-D already and is left alone, which is what you want for RHEED —
+        2-D already and is left alone, which is what you want for RHEED -
         the de-mosaic would only interpolate intensity the sensor never saw.
         """
         frame = np.asarray(frame)
@@ -314,7 +315,7 @@ class CameraBackend:
         return self._bin
 
     def max_binning(self):
-        """Largest binning factor offered.  4 by default — the software path
+        """Largest binning factor offered.  4 by default - the software path
         can bin any sensor, so the UI never needs to grey the buttons out."""
         return 4
 
@@ -416,7 +417,7 @@ class CameraBackend:
 # Why it matters for RHEED specifically: auto gain, auto exposure, auto black
 # level and black-level clamping all move in discrete steps, and every step
 # puts a sharp edge in the intensity-vs-time trace that looks exactly like the
-# start of a growth transient.  Hardware gamma is worse — it makes intensity
+# start of a growth transient.  Hardware gamma is worse - it makes intensity
 # non-linear, so oscillation amplitudes stop meaning anything.
 
 GENICAM_MANUAL_SETUP = [
@@ -440,7 +441,7 @@ GENICAM_ID_FEATURES = [
 
 
 # ---------------------------------------------------------------------------
-# FLIR / Point Grey — Spinnaker (PySpin)
+# FLIR / Point Grey - Spinnaker (PySpin)
 # ---------------------------------------------------------------------------
 
 _spin_system = None
@@ -462,8 +463,8 @@ def _spinnaker_system():
 class SpinnakerBackend(CameraBackend):
     """FLIR / Point Grey cameras through the Spinnaker SDK.
 
-    This is the backend VRHEED was originally written against — the Blackfly S
-    on the MBE — so its behaviour is the reference the others imitate.
+    This is the backend VRHEED was originally written against - the Blackfly S
+    on the MBE - so its behaviour is the reference the others imitate.
     """
 
     backend_id = "spinnaker"
@@ -474,7 +475,7 @@ class SpinnakerBackend(CameraBackend):
     supports_hardware_binning = True
 
     driver_module = "PySpin"
-    install_hint = ("PySpin not installed — it ships inside the FLIR Spinnaker "
+    install_hint = ("PySpin not installed - it ships inside the FLIR Spinnaker "
                     "SDK installer as a .whl, not on PyPI. The wheel must match "
                     "your Python version (the cp311 in its filename).")
 
@@ -653,7 +654,7 @@ def _spinnaker_hint(exc):
     low = msg.lower()
     if "-1015" in msg or "wrong subnet" in low:
         return (f"{msg}\n\n"
-                "This is a GigE network configuration problem — the NIC connected\n"
+                "This is a GigE network configuration problem - the NIC connected\n"
                 "to the camera is on a different IP subnet than the camera.\n\n"
                 "Fix:\n"
                 "  1. Open Control Panel -> Network Adapters\n"
@@ -668,14 +669,14 @@ def _spinnaker_hint(exc):
 
 
 # ---------------------------------------------------------------------------
-# Basler — pylon (pypylon)
+# Basler - pylon (pypylon)
 # ---------------------------------------------------------------------------
 
 class PylonBackend(CameraBackend):
     """Basler ace / dart / boost cameras through pypylon.
 
     Basler is the most common machine-vision brand on MBE systems after FLIR,
-    and pypylon is a plain ``pip install pypylon`` — no vendor installer — so
+    and pypylon is a plain ``pip install pypylon`` - no vendor installer - so
     this is the easiest backend for a new user to get running.
     """
 
@@ -813,7 +814,7 @@ class PylonBackend(CameraBackend):
 
 
 # ---------------------------------------------------------------------------
-# Allied Vision — Vimba X / Vimba (vmbpy, vimba)
+# Allied Vision - Vimba X / Vimba (vmbpy, vimba)
 # ---------------------------------------------------------------------------
 
 class VimbaBackend(CameraBackend):
@@ -821,8 +822,8 @@ class VimbaBackend(CameraBackend):
 
     Vimba's Python API is written around ``with`` blocks, which do not fit an
     app that opens a camera in one method and reads it in another thread, so
-    the contexts are entered and exited explicitly here.  That is supported —
-    they are ordinary context managers — but it does mean ``close()`` has to
+    the contexts are entered and exited explicitly here.  That is supported -
+    they are ordinary context managers - but it does mean ``close()`` has to
     unwind them in the right order or the SDK leaks the device handle.
     """
 
@@ -952,7 +953,7 @@ class VimbaBackend(CameraBackend):
 
 
 # ---------------------------------------------------------------------------
-# Any GigE Vision / USB3 Vision camera — GenICam GenTL (harvesters)
+# Any GigE Vision / USB3 Vision camera - GenICam GenTL (harvesters)
 # ---------------------------------------------------------------------------
 
 def _gentl_producers():
@@ -960,7 +961,7 @@ def _gentl_producers():
 
     A .cti is the vendor's GenTL driver.  Every GenICam-compliant vendor ships
     one, and any of them will usually drive any other vendor's GigE Vision or
-    USB3 Vision camera — which is the whole point of this backend: install one
+    USB3 Vision camera - which is the whole point of this backend: install one
     SDK, get every standards-compliant camera, including the ones VRHEED has
     never heard of.
     """
@@ -1014,8 +1015,8 @@ def _gentl_producers():
 class GenICamBackend(CameraBackend):
     """Any GenICam camera, through a GenTL producer, via harvesters.
 
-    Covers the vendors with no dedicated backend here — IDS, Lucid, JAI,
-    Baumer, Ximea, Matrix Vision, Photonfocus, Emergent and the rest — plus
+    Covers the vendors with no dedicated backend here - IDS, Lucid, JAI,
+    Baumer, Ximea, Matrix Vision, Photonfocus, Emergent and the rest - plus
     Basler and Allied Vision when their Python bindings are not installed but
     their SDK is.  If a camera says "GigE Vision" or "USB3 Vision" on the
     datasheet, this is the backend that will talk to it.
@@ -1048,7 +1049,7 @@ class GenICamBackend(CameraBackend):
             if not _missing(error, "harvesters"):
                 return f"harvesters is installed but will not load: {error}"
             return cls.install_hint
-        return ("no GenTL producer (.cti) found — install any vendor SDK, or set "
+        return ("no GenTL producer (.cti) found - install any vendor SDK, or set "
                 "GENICAM_GENTL64_PATH to the folder holding its .cti file")
 
     @classmethod
@@ -1160,11 +1161,11 @@ class GenICamBackend(CameraBackend):
 
 
 # ---------------------------------------------------------------------------
-# Scientific CCD / sCMOS cameras — pylablib
+# Scientific CCD / sCMOS cameras - pylablib
 # ---------------------------------------------------------------------------
 #
 # The high-sensitivity end of RHEED: Andor iXon/Zyla, Hamamatsu ORCA,
-# Princeton Instruments PIXIS, Thorlabs scientific cameras, pco.edge — and,
+# Princeton Instruments PIXIS, Thorlabs scientific cameras, pco.edge - and,
 # just as usefully, National Instruments IMAQ frame grabbers, which is how a
 # 1990s analogue RHEED camera gets digitised on a system nobody wants to
 # rewire.  pylablib wraps all of them behind one API, so one backend class
@@ -1193,7 +1194,7 @@ class PylablibBackend(CameraBackend):
     pylablib's camera objects share one interface whatever the hardware is:
     ``setup_acquisition`` / ``start_acquisition`` / ``wait_for_frame`` /
     ``read_newest_image``.  Not every camera implements every control, so each
-    setter here is a best-effort call — the base class swallows what the
+    setter here is a best-effort call - the base class swallows what the
     hardware refuses and the GUI keeps working.
     """
 
@@ -1314,7 +1315,7 @@ class PylablibBackend(CameraBackend):
 
 
 # ---------------------------------------------------------------------------
-# USB / UVC webcams, and analogue cameras on a USB frame grabber — OpenCV
+# USB / UVC webcams, and analogue cameras on a USB frame grabber - OpenCV
 # ---------------------------------------------------------------------------
 
 def _uvc_backend_id():
@@ -1450,7 +1451,7 @@ class UsbCameraBackend(CameraBackend):
 
     def _set_exposure_ms(self, v):
         # Take the camera out of auto first, or the next auto update simply
-        # overwrites whatever we set — and an auto-exposure step in the middle
+        # overwrites whatever we set - and an auto-exposure step in the middle
         # of a growth is indistinguishable from a real intensity transient.
         self._disable_auto_exposure()
         self._cap.set(cv2.CAP_PROP_EXPOSURE, self._exposure_value(v))
@@ -1509,7 +1510,7 @@ class UsbCameraBackend(CameraBackend):
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
 
     def open_native_dialog(self):
-        """DirectShow's own property sheet — the only place some webcams let
+        """DirectShow's own property sheet - the only place some webcams let
         you turn auto-exposure and auto-white-balance off for good."""
         try:
             self._cap.set(cv2.CAP_PROP_SETTINGS, 1)
@@ -1527,7 +1528,7 @@ class UsbCameraBackend(CameraBackend):
 
 
 # ---------------------------------------------------------------------------
-# Network cameras — RTSP / HTTP-MJPEG / GigE streamers
+# Network cameras - RTSP / HTTP-MJPEG / GigE streamers
 # ---------------------------------------------------------------------------
 
 # URLs the operator has added by hand.  They cannot be discovered, so the app
@@ -1557,8 +1558,8 @@ class NetworkCameraBackend(CameraBackend):
 
     Two situations make this the right answer:  the RHEED camera is an IP
     camera (an Axis or Hikvision on the chamber, streaming RTSP), or the
-    camera is wired to a different computer — typically the one running the
-    vendor's own software — which re-streams it.  Either way VRHEED only needs
+    camera is wired to a different computer - typically the one running the
+    vendor's own software - which re-streams it.  Either way VRHEED only needs
     the URL:
 
         rtsp://user:password@192.168.1.64:554/Streaming/Channels/101
@@ -1566,7 +1567,7 @@ class NetworkCameraBackend(CameraBackend):
 
     Exposure and gain belong to the camera's own web interface; VRHEED only
     receives the decoded pictures.  Bear in mind that the stream is usually
-    H.264, so the intensities you measure have been through a lossy codec —
+    H.264, so the intensities you measure have been through a lossy codec -
     fine for oscillation timing, not for absolute photometry.
     """
 
@@ -1624,7 +1625,7 @@ def _redact(url):
 
 
 # ---------------------------------------------------------------------------
-# Screen capture — digitising whatever the vendor software is already showing
+# Screen capture - digitising whatever the vendor software is already showing
 # ---------------------------------------------------------------------------
 
 class ScreenCaptureBackend(CameraBackend):
@@ -1638,7 +1639,7 @@ class ScreenCaptureBackend(CameraBackend):
     VRHEED measurement works on it.
 
     Two honest caveats.  What you measure is the vendor software's *display*,
-    so its own contrast curve and any 8-bit conversion are baked in — relative
+    so its own contrast curve and any 8-bit conversion are baked in - relative
     oscillations survive, absolute intensities do not.  And the frame rate is
     the capture rate, not the camera's, so the FFT axis is only as good as the
     screen refresh.
@@ -1769,14 +1770,14 @@ def screen_source_key(monitor_index, region=None):
 
 
 # ---------------------------------------------------------------------------
-# Synthetic camera — demo, teaching and tests, no hardware
+# Synthetic camera - demo, teaching and tests, no hardware
 # ---------------------------------------------------------------------------
 
 class SyntheticBackend(CameraBackend):
     """A simulated RHEED pattern: streaks plus an oscillating specular spot.
 
     Always present, so VRHEED can be installed, opened and learned on a laptop
-    with nothing attached — which is how most people will first meet it — and
+    with nothing attached - which is how most people will first meet it - and
     so the ROI, FFT and lattice tools have a source with a *known* answer:
     the specular intensity oscillates at exactly 0.25 Hz (4 s per monolayer)
     and the streaks sit at a fixed spacing.
@@ -1889,7 +1890,7 @@ BACKENDS_BY_ID = {b.backend_id: b for b in BACKENDS}
 def enumerate_cameras(include=None, exclude=None):
     """Every camera VRHEED can currently connect to, best sources first.
 
-    A backend that raises while enumerating is logged and skipped — one broken
+    A backend that raises while enumerating is logged and skipped - one broken
     vendor DLL must never stop the operator reaching the camera that works.
 
     ``include`` / ``exclude`` are sets of backend ids, for the slow paths:
@@ -1943,7 +1944,7 @@ def find_camera(key, cameras):
 
 
 def backend_status():
-    """(name, available, reason) for every backend — shown in Help > About.
+    """(name, available, reason) for every backend - shown in Help > About.
 
     The reason strings are install instructions, because "your camera is not
     listed" is the first problem a new user has and this is where they look.
@@ -2044,31 +2045,49 @@ def shutdown():
         GenICamBackend._harvester = None
 
 
+def _safe_print(text=""):
+    """print() that cannot die on the terminal's encoding.
+
+    A Windows console is often cp1252, and a stream redirected to a file uses
+    the locale encoding, where a character outside it raises UnicodeEncodeError
+    and kills the process.  This module is deliberately pure ASCII so that
+    should never arise -- but this is the one tool somebody runs when nothing
+    else works, and it must not be the thing that fails.
+    """
+    stream = sys.stdout
+    try:
+        print(text, file=stream)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "ascii"
+        print(text.encode(encoding, "replace").decode(encoding, "replace"),
+              file=stream)
+
+
 if __name__ == "__main__":
-    # `python vrheed_cameras.py` prints what this machine can see — the first
+    # `python vrheed_cameras.py` prints what this machine can see - the first
     # thing to run when a camera does not show up in the app.  Add --flir for
     # a step-by-step FLIR diagnosis.
     import sys as _sys
     logging.basicConfig(level=logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
-    print(f"Python {platform.python_version()} ({_sys.executable})")
-    print(f"Platform {platform.platform()}\n")
-    print("Backends")
+    _safe_print(f"Python {platform.python_version()} ({_sys.executable})")
+    _safe_print(f"Platform {platform.platform()}\n")
+    _safe_print("Backends")
     for name, ok, reason in backend_status():
-        print(f"  [{'x' if ok else ' '}] {name}")
+        _safe_print(f"  [{'x' if ok else ' '}] {name}")
         if reason:
             for line in reason.splitlines():
-                print(f"        {line}")
-    print("\nCameras")
+                _safe_print(f"        {line}")
+    _safe_print("\nCameras")
     cams = enumerate_cameras()
     if not cams:
-        print("  (none)")
+        _safe_print("  (none)")
     for info in cams:
-        print(f"  {info.key:<28} {info.label}"
-              + (f"   [{info.detail}]" if info.detail else ""))
+        _safe_print(f"  {info.key:<28} {info.label}"
+                    + (f"   [{info.detail}]" if info.detail else ""))
 
     if "--flir" in _sys.argv or not any(c.backend_id == "spinnaker" for c in cams):
-        print("\nFLIR / Spinnaker detail")
+        _safe_print("\nFLIR / Spinnaker detail")
         for line in spinnaker_report():
-            print(f"  {line}")
+            _safe_print(f"  {line}")
     shutdown()
