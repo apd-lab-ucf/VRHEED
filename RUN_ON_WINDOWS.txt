@@ -1,12 +1,30 @@
 VRHEED 2.2.0 — running from source on Windows
 =============================================
 
-1.  Install Python 3.11 or 3.12 from python.org.
+1.  Python version: LET THE CAMERA DECIDE.
+
+    PySpin ships as a wheel built for ONE Python version, named
+    ...-cp310-cp310-win_amd64.whl for Python 3.10, cp311 for 3.11, and
+    so on.  You must install the Python that matches the wheel your
+    Spinnaker SDK gives you -- not the newest one.  Find your wheels:
+
+        Get-ChildItem "C:\Program Files","$env:USERPROFILE\Downloads" `
+          -Filter "spinnaker_python*.whl" -Recurse -ErrorAction SilentlyContinue |
+          Select-Object Name, FullName
+
+    Whatever cpXX they say is the Python to install, from python.org.
     Tick "Add python.exe to PATH" on the first installer screen.
 
-    Not 3.13: PySpin wheels are built per Python version and FLIR's
-    newest at the time of writing is 3.10/3.11.  Match whatever your
-    Spinnaker SDK ships.
+    Without a FLIR camera any Python 3.9+ is fine.
+
+    If several Pythons are already installed, list them with
+
+        py -0p
+
+    and run VRHEED with a specific one using  py -3.10 main.py  (or
+    whichever version has PySpin).  "python" follows PATH order, which
+    is frequently NOT the one you want, and "python3" does not exist on
+    Windows at all -- it is a Microsoft Store stub.
 
 2.  Open a terminal in this folder (Shift+right-click the folder ->
     "Open PowerShell window here", or type  cmd  in the Explorer
@@ -191,11 +209,28 @@ The app opens but the Camera tab says no camera found
     app shows the same driver list.
 
 VRHEED opens in file-analysis mode with PySpin installed
-    Either the wheel is for a different Python version, or it loaded
-    but its DLLs did not.  Step 4 now tells these apart -- "not
-    installed" and "installed but will not load" need different
-    fixes.  Check python --version against the cpXX in the wheel
-    filename.
+    Usually you are running the wrong Python.  A machine with several
+    installed will have PySpin in only one of them, and "python" picks
+    by PATH order.  Step 4 finds the right one and prints the exact
+    command to use.  Otherwise the wheel loaded but its DLLs did not:
+    step 4 tells those two apart, because "not installed" and
+    "installed but will not load" need different fixes.
+
+"Python was not found; run without arguments to install from the
+Microsoft Store"
+    You typed python3.  That does not exist on Windows.  Use python,
+    or py -3.10 to pick a version.
+
+PySpin imports but Spinnaker reports 0 cameras
+    First check SpinView sees the camera; if it does not, this is not
+    a VRHEED problem.  If SpinView is fine, check the binding version
+    against the SDK version -- they are separate installs and are
+    meant to match:
+
+        py -3.10 -m pip show spinnaker-python
+
+    Step 4 prints the SDK version found on disk.  A 4.2 binding on a
+    4.3 runtime can enumerate nothing.
 
 Nothing is wrong but you want to try the app anyway
     Pick "Simulated RHEED pattern" in the Source box.  It draws a

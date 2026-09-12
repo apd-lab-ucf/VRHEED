@@ -611,11 +611,16 @@ class SpinnakerBackend(CameraBackend):
         if look_around:
             others = _pythons_with_pyspin()
             if others:
-                text += ("\nPySpin IS installed in another Python on this "
-                         "machine:\n"
-                         + "\n".join(f"    {exe}  (Python {ver})"
-                                      for exe, ver in others)
-                         + "\nRun VRHEED with that one instead.")
+                exe, ver = others[0]
+                text += (f"\nPySpin IS installed in another Python on this "
+                         f"machine:\n"
+                         + "\n".join(f"    {other}  (Python {other_ver})"
+                                      for other, other_ver in others)
+                         + "\n\nRun VRHEED with that one. Give it the other "
+                         "dependencies first:\n"
+                         f'    "{exe}" -m pip install -r requirements.txt\n'
+                         f'    "{exe}" vrheed_cameras.py --flir\n'
+                         f'    "{exe}" main.py')
         return text
 
     @classmethod
