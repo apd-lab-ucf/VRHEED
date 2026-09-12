@@ -53,3 +53,29 @@ jobs:
 
       - name: App starts headless (same check the release build uses)
         run: python main.py --check
+
+  # VRHEED itself runs on numpy 1 and numpy 2.  This job is what keeps it that
+  # way: numpy 2.0 removed the ndarray.ptp() METHOD, and because the call sat
+  # inside a broad `except Exception` the Gaussian profile fit silently
+  # degraded to the half-max estimate -- correct-looking numbers, quietly worse,
+  # no error.  Pinning alone would have hidden that; this catches the next one.
+  forward-compat-numpy2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install with numpy 2
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install --upgrade "numpy>=2"
+          python -c "import numpy; print('numpy', numpy.__version__)"
+      - name: Analysis self-checks
+        run: python test_analysis.py
+      - name: Camera backends
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python test_cameras.py
