@@ -56,6 +56,18 @@ the first thing to run when a camera does not appear in the app.
 
 ### What each backend can and cannot do
 
+**VRHEED starts at 4x4 binning.** A RHEED pattern is a handful of broad
+streaks, so the resolution costs nothing you were using, while each output
+pixel collects 16x the photons and the camera delivers frames faster - a
+cleaner intensity trace, which is the measurement everything else rests on.
+Drop to 1x from the Camera tab when you want the sharpest streak profile.
+
+Two consequences worth knowing. The pixel-pitch box on the Lattice tab means
+the pitch *after* binning, so at 4x it is your sensor pitch times four (times
+lens magnification); the Lattice tab now says so with the binning in force.
+And a calibration made with *Calibrate from pattern* is rescaled automatically
+when you change binning, so you do not have to redo it.
+
 Gain, exposure, frame rate and binning are enabled per camera; a control the
 camera cannot honour is greyed out rather than silently ignored.  Binning that
 the hardware cannot do is done in software (mean pooling) so the 1× / 2× / 4×

@@ -214,6 +214,16 @@ TRACK_LABEL = dict(TRACK_MODES)
 # the box chase shot noise; this settles in a few frames without jitter.
 TRACK_GAIN = 0.35
 
+# Binning the app starts at.  4x is the sensible default for RHEED: the
+# pattern is a handful of broad streaks, not fine detail, so the resolution
+# costs nothing you were using, while each output pixel collects 16x the
+# photons and the camera delivers frames faster.  That buys a cleaner
+# intensity trace, which is the measurement everything else rests on.
+#
+# It is applied through CameraBackend.set_binning, so a sensor that caps out
+# below 4 gets the rest in software and still ends up at 4x.
+DEFAULT_BINNING = 4
+
 # Frames waiting between the source and the UI loop.  The UI loop measures
 # EVERY queued frame each tick and draws only the last, so a deeper queue does
 # not add display latency; it is what lets 20x video playback keep every
@@ -894,7 +904,7 @@ class VRHEED_App(QMainWindow):
         self._bin_group = QButtonGroup(self)
         for val, lbl in [(1, "1×"), (2, "2×"), (4, "4×")]:
             rb = QRadioButton(lbl)
-            rb.setChecked(val == 1)
+            rb.setChecked(val == DEFAULT_BINNING)
             rb.toggled.connect(lambda checked, v=val: checked and self._apply_binning(v))
             fb_row.addWidget(rb)
             self._bin_group.addButton(rb, val)
@@ -1217,6 +1227,14 @@ class VRHEED_App(QMainWindow):
             "Size of one camera pixel projected onto the phosphor screen,\n"
             "including the camera lens magnification and current binning.")
         g.addWidget(self.pixel_spin, 1, 3)
+        # The pitch box means the pitch AFTER binning (see its tooltip), so
+        # the binning in force has to be visible here -- otherwise the default
+        # 4x silently makes every geometry-derived lattice constant 4x wrong
+        # for anyone who typed in their sensor's raw pixel size.
+        self.bin_note = QLabel()
+        self.bin_note.setStyleSheet("color:#f39c12;")
+        self.bin_note.setWordWrap(True)
+        g.addWidget(self.bin_note, 2, 0, 1, 4)
 
         btn_cal = QPushButton("Calibrate from pattern")
         btn_cal.setStyleSheet("background:#2980b9;color:white;")
@@ -1472,6 +1490,14 @@ class VRHEED_App(QMainWindow):
         self._reset_averaging()
         self.reference_frame = None
         self._clear_reference()
+        # A calibration constant is K = a * dx_px, and dx_px scales with the
+        # binning, so K measured at one binning is wrong at another.  Rescale
+        # it rather than discarding it: the operator calibrated against a
+        # known lattice constant and should not have to do it again for a
+        # change that does not move the pattern.
+        old_bin = self.cam.binning if self.cam is not None else 1
+        if self._lattice_K is not None and old_bin and n:
+            self._lattice_K *= float(old_bin) / float(n)
         how = ""
         try:
             self.cam.set_binning(n)
@@ -1488,9 +1514,10 @@ class VRHEED_App(QMainWindow):
         self._drain_frame_queue()
         self._start_acquisition()
         self.ui_timer.start(16)
-        self.statusBar().showMessage(
-            f"Binning {n}×{n}{how} — pixel pitch on the Lattice tab is now "
-            f"{n}× larger.", 6000)
+        self._update_binning_note()
+        note = (" Calibration K rescaled." if self._lattice_K is not None
+                else f" Pixel pitch on the Lattice tab is now {n}× larger.")
+        self.statusBar().showMessage(f"Binning {n}×{n}{how}.{note}", 6000)
 
     def _toggle_pause(self):
         self.paused = not self.paused
@@ -1634,6 +1661,7 @@ class VRHEED_App(QMainWindow):
         cam.set_binning(self._bin_group.checkedId() or 1)
 
         self.btn_cam_connect.setText("Disconnect")
+        self._update_binning_note()
         self._update_source_status()
         logger.info("Connected to %s", info.key)
         if self.source_mode == 'camera':
@@ -3122,6 +3150,17 @@ class VRHEED_App(QMainWindow):
             self.slice_info.setText("")
         if self.slice_streak_cb.isChecked():
             self._update_lattice_readout(dx)
+
+    def _update_binning_note(self):
+        """Keep the Lattice tab honest about the binning in force."""
+        n = self.cam.binning if self.cam is not None else (
+            self._bin_group.checkedId() or 1)
+        if n and n > 1:
+            self.bin_note.setText(
+                f"Binning is {n}×{n}: the pixel pitch above must be your "
+                f"sensor pitch × {n} (× lens magnification).")
+        else:
+            self.bin_note.setText("")
 
     def _update_lattice_readout(self, dx_px):
         """Report whatever the active ROI can currently support.

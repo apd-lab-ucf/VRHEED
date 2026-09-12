@@ -594,10 +594,21 @@ def test_spinnaker_against_stub(app):
 
             pump(app, 0.4)
             frame = win.last_raw_frame
-            check("16-bit frames arrive at full sensor resolution",
-                  frame is not None and frame.shape == (2048, 2448)
+            # The app starts at DEFAULT_BINNING.  This Blackfly caps at 2x in
+            # hardware, so 4x is 2x on the sensor and 2x in software -- the
+            # point being that the operator asked for 4x and got 4x.
+            d = main.DEFAULT_BINNING
+            check(f"frames arrive binned {d}x{d}, the startup default",
+                  frame is not None
+                  and frame.shape == (2048 // d, 2448 // d)
                   and frame.dtype == np.uint16,
                   None if frame is None else (frame.shape, frame.dtype))
+            check("the default binning reached the camera",
+                  win.cam.binning == d, win.cam.binning)
+            check("the Lattice tab warns that the pitch must include binning",
+                  "Binning is" in win.bin_note.text()
+                  and str(d) in win.bin_note.text(),
+                  win.bin_note.text())
             check("16-bit full scale is recognised", win._raw_max == 65535.0,
                   win._raw_max)
             check("incomplete frames are dropped, never measured",
@@ -652,6 +663,25 @@ def test_spinnaker_against_stub(app):
                   sum(1 for t in threading.enumerate()
                       if getattr(getattr(t, "_target", None), "__name__", "")
                       == "_capture_loop" and t.is_alive()) <= 1)
+
+            # A lattice calibration must survive a binning change.  K = a*dx
+            # and dx scales with binning, so K has to scale the other way or
+            # the lattice constant silently changes by that factor.
+            import vrheed_analysis as va
+            win._apply_binning(1)
+            pump(app, 0.6)
+            a_known, dx_at_1x = 3.905, 40.0
+            win._lattice_K = va.calibration_constant(a_known, dx_at_1x)
+            win._apply_binning(2)
+            pump(app, 0.6)
+            # The same feature now spans half as many pixels.
+            a_after = va.lattice_from_calibration(dx_at_1x / 2, win._lattice_K)
+            check("a lattice calibration survives a binning change",
+                  abs(a_after - a_known) < 1e-9,
+                  f"{a_after:.6f} A vs {a_known} A")
+            win._lattice_K = None
+            win._apply_binning(1)
+            pump(app, 0.6)
 
             meta = dict(x for x in win._collect_metadata() if isinstance(x, tuple))
             check("the CSV header carries model, serial and vendor",
