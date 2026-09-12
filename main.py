@@ -14,6 +14,11 @@ for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
 del _v
 
+# Also before cv2 is imported.  Scanning for USB cameras makes OpenCV log a
+# warning per index that is not one; they are normal and they frighten people.
+# ERROR keeps everything that matters.  See vrheed_cameras for the detail.
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+
 import csv
 import json
 import logging

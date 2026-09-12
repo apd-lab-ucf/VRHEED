@@ -31,14 +31,28 @@ recorded video.
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
 import platform
 import importlib
 import re
+import subprocess
 import sys
 import threading
 import time
+
+# Must be set BEFORE cv2 is imported: OpenCV reads it when its logging system
+# initialises.  Probing USB indices emits a WARN for every index that is not a
+# camera, so a machine with none produces a screenful of warnings that mean
+# nothing went wrong -- actively misleading in a diagnostic whose job is to say
+# what IS wrong.  ERROR keeps anything that matters.  setdefault so
+# OPENCV_LOG_LEVEL=INFO in the environment still wins when someone is debugging.
+#
+# This governs OpenCV's own log channel, which is where the Windows DSHOW
+# warnings come from.  The macOS AVFoundation backend also writes two lines
+# straight to stderr that no OpenCV setting controls; those remain.
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
 import cv2
 import numpy as np
@@ -73,6 +87,107 @@ def _probe_import(module_name):
         return None, str(e)
     except Exception as e:                    # a driver can fail any way it likes
         return None, f"{type(e).__name__}: {e}"
+
+
+def _pythons_with_pyspin(limit=8):
+    """Other Python interpreters on this machine that can import PySpin.
+
+    "PySpin not installed" is the right message only when it is installed
+    nowhere.  When VRHEED used to see the camera and now does not, what
+    actually changed is which python.exe is first on PATH -- the wheel is
+    still sitting in the interpreter it was installed into.  Telling someone
+    to install what they already have sends them in a circle, so look.
+
+    Windows-first, because that is where several Pythons on one PATH is the
+    normal state of affairs.  Returns [(executable, version), ...].
+    """
+    candidates = []
+    if platform.system() == "Windows":
+        # The py launcher knows every registered install.
+        try:
+            out = subprocess.run(["py", "-0p"], capture_output=True, text=True,
+                                 timeout=15).stdout
+            for line in out.splitlines():
+                match = re.search(r"([A-Za-z]:\\[^\r\n]*?python\.exe)", line)
+                if match:
+                    candidates.append(match.group(1))
+        except Exception:
+            pass
+        # ...plus the usual unregistered spots.
+        for pattern in (os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\*\python.exe"),
+                        r"C:\Python*\python.exe",
+                        os.path.expandvars(r"%ProgramFiles%\Python*\python.exe")):
+            try:
+                candidates.extend(glob.glob(pattern))
+            except Exception:
+                continue
+    else:
+        candidates.extend(glob.glob("/usr/bin/python3.*"))
+        candidates.extend(glob.glob("/opt/homebrew/bin/python3.*"))
+
+    seen, found = set(), []
+    here = os.path.normcase(os.path.abspath(sys.executable))
+    for exe in candidates:
+        key = os.path.normcase(os.path.abspath(exe))
+        if key in seen or key == here or not os.path.isfile(exe):
+            continue
+        seen.add(key)
+        if len(seen) > limit:
+            break
+        try:
+            probe = subprocess.run(
+                [exe, "-c", "import PySpin, sys; print(sys.version.split()[0])"],
+                capture_output=True, text=True, timeout=30)
+        except Exception:
+            continue
+        if probe.returncode == 0 and probe.stdout.strip():
+            found.append((exe, probe.stdout.strip()))
+    return found
+
+
+def _spinnaker_sdk_on_disk():
+    """What FLIR Spinnaker SDK is installed, independent of PySpin.
+
+    The binding and the SDK are separate installs that must agree, so when
+    PySpin will not import it matters whether the SDK is there at all, which
+    version it is, and which Python wheels it shipped.  Nothing here imports
+    PySpin -- that is the point.
+    """
+    lines = []
+    roots = []
+    if platform.system() == "Windows":
+        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                     os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+            # FLIR moved to Teledyne branding partway through Spinnaker 3.
+            roots += [os.path.join(base, "FLIR Systems", "Spinnaker"),
+                      os.path.join(base, "Teledyne", "Spinnaker"),
+                      os.path.join(base, "Point Grey Research", "Spinnaker")]
+    else:
+        roots += ["/usr/lib/spinnaker", "/opt/spinnaker"]
+
+    for root in roots:
+        if os.path.isdir(root):
+            lines.append(f"Spinnaker SDK found: {root}")
+            # The wheels the installer dropped tell you which Python versions
+            # this SDK can bind to at all.
+            wheels = []
+            for pattern in ("**/spinnaker_python*.whl", "**/PySpin*.whl"):
+                try:
+                    wheels += glob.glob(os.path.join(root, pattern), recursive=True)
+                except Exception:
+                    continue
+            for wheel in sorted(set(wheels))[:10]:
+                lines.append(f"  wheel: {os.path.basename(wheel)}")
+                lines.append(f"         {wheel}")
+            if not wheels:
+                lines.append("  (no PySpin wheel under the SDK folder; on recent "
+                             "versions it is a separate download)")
+    if not lines:
+        lines.append("No Spinnaker SDK install found in the usual locations.")
+        if platform.system() == "Windows":
+            lines.append("  Looked under Program Files: FLIR Systems\\Spinnaker, "
+                         "Teledyne\\Spinnaker, Point Grey Research\\Spinnaker")
+    return lines
 
 
 def _missing(error_text, module_name):
@@ -476,8 +591,32 @@ class SpinnakerBackend(CameraBackend):
 
     driver_module = "PySpin"
     install_hint = ("PySpin not installed - it ships inside the FLIR Spinnaker "
-                    "SDK installer as a .whl, not on PyPI. The wheel must match "
-                    "your Python version (the cp311 in its filename).")
+                    "SDK installer as a .whl, not on PyPI.")
+
+    @classmethod
+    def _absent_hint(cls, look_around=True):
+        """What to do when PySpin is not in THIS interpreter.
+
+        Names the wheel tag this Python actually needs.  A hard-coded example
+        is worse than none: someone on Python 3.9 reads "cp311" as the version
+        to install and goes hunting for the wrong file.
+        """
+        tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
+        text = (f"PySpin not installed in this Python "
+                f"({sys.version.split()[0]}, {sys.executable}).\n"
+                "It ships inside the FLIR Spinnaker SDK installer as a .whl, "
+                "not on PyPI.\n"
+                f"This interpreter needs the {tag} wheel, named like\n"
+                f"    spinnaker_python-<version>-{tag}-{tag}-win_amd64.whl")
+        if look_around:
+            others = _pythons_with_pyspin()
+            if others:
+                text += ("\nPySpin IS installed in another Python on this "
+                         "machine:\n"
+                         + "\n".join(f"    {exe}  (Python {ver})"
+                                      for exe, ver in others)
+                         + "\nRun VRHEED with that one instead.")
+        return text
 
     @classmethod
     def unavailable_reason(cls):
@@ -491,7 +630,10 @@ class SpinnakerBackend(CameraBackend):
                     "different version than the PySpin wheel. Check that "
                     "SpinView opens the camera, and that the wheel's cpXX "
                     "matches your Python version.")
-        return cls.install_hint
+        # Scanning spawns a subprocess per interpreter, so the backend table
+        # (drawn on every refresh) gets the cheap answer and the --flir report
+        # does the looking.
+        return cls._absent_hint(look_around=False)
 
     @classmethod
     def enumerate(cls):
@@ -1318,6 +1460,33 @@ class PylablibBackend(CameraBackend):
 # USB / UVC webcams, and analogue cameras on a USB frame grabber - OpenCV
 # ---------------------------------------------------------------------------
 
+class _quiet_opencv:
+    """Quieten OpenCV's VIDEOIO chatter around a USB probe.
+
+    The env var set at import time does the real work; this additionally uses
+    the runtime API where the build has one (it is absent from several
+    opencv-python builds, hence the guard).
+    """
+
+    def __enter__(self):
+        self._previous = None
+        try:
+            logging_api = cv2.utils.logging
+            self._previous = logging_api.getLogLevel()
+            logging_api.setLogLevel(logging_api.LOG_LEVEL_SILENT)
+        except Exception:
+            self._previous = None
+        return self
+
+    def __exit__(self, *exc):
+        if self._previous is not None:
+            try:
+                cv2.utils.logging.setLogLevel(self._previous)
+            except Exception:
+                pass
+        return False
+
+
 def _uvc_backend_id():
     """The OpenCV capture backend to use for local video devices.
 
@@ -1383,6 +1552,11 @@ class UsbCameraBackend(CameraBackend):
 
     @classmethod
     def enumerate(cls, max_index=8):
+        with _quiet_opencv():
+            return cls._enumerate(max_index)
+
+    @classmethod
+    def _enumerate(cls, max_index):
         out = []
         api = _uvc_backend_id()
         for idx in range(max_index):
@@ -1969,10 +2143,14 @@ def spinnaker_report():
     program has it open.  Each line here separates one of those.
     """
     lines = []
+    lines.extend(_spinnaker_sdk_on_disk())
     module, error = _probe_import("PySpin")
     if module is None:
         lines.append(f"PySpin import FAILED: {error}")
-        lines.append("  -> " + SpinnakerBackend.unavailable_reason())
+        detail = (SpinnakerBackend._absent_hint(look_around=True)
+                  if _missing(error, "PySpin")
+                  else SpinnakerBackend.unavailable_reason())
+        lines.extend("  -> " + part for part in detail.splitlines())
         return lines
     lines.append("PySpin imported OK")
     for label, attr in (("PySpin version", "__version__"),
