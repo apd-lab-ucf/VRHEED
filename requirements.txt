@@ -5,11 +5,31 @@ opencv-python
 PyQt5
 pyqtgraph
 
-# PySpin (FLIR camera driver) is NOT on PyPI.  It ships as a wheel inside the
-# FLIR Spinnaker SDK installer and must be installed from there, matched to
-# your Python version.  It is optional: without it the app starts in
-# file-analysis mode (load recorded videos / traces, no live camera).
-
+# ---------------------------------------------------------------------------
+# Camera drivers -- ALL OPTIONAL
+# ---------------------------------------------------------------------------
+# VRHEED runs with none of these: it always offers the simulated RHEED source,
+# any USB/UVC camera, network streams, and recorded video and image files.
+# Install only the one your camera needs, then press the refresh button in the
+# Camera tab.  Help > Camera backends shows what is currently detected.
+#
+#   Camera                                      Install
+#   ------------------------------------------  ------------------------------
+#   FLIR / Point Grey (Blackfly, Grasshopper)   PySpin, from the FLIR Spinnaker
+#                                               SDK installer -- not on PyPI.
+#   Basler (ace, dart, boost)                   pip install pypylon
+#   Allied Vision (Manta, Alvium, Mako)         vmbpy, from the Vimba X SDK
+#   Any other GigE Vision / USB3 Vision camera  pip install harvesters
+#       (IDS, Lucid, JAI, Baumer, Ximea,        plus any vendor SDK for its
+#        Matrix Vision, Photonfocus, Emergent)  GenTL producer (.cti) file
+#   Andor, Hamamatsu, Princeton Instruments,    pip install pylablib
+#   Photometrics, PCO, Thorlabs scientific,     plus the vendor's own SDK/DLLs
+#   NI IMAQ / IMAQdx frame grabbers
+#   Screen capture (vendor software, kSA 400)   pip install mss
+#
+# Analogue RHEED cameras on a USB frame grabber need nothing extra -- the
+# grabber appears as a normal USB video device.
+#
 # pyinstaller is needed only to build the Windows exe (see build.bat); it is
 # not required to run the app from source.
 # pyinstaller

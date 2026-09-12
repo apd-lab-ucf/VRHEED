@@ -1,19 +1,108 @@
 # VRHEED — Precision Analyzer
 
-Live RHEED acquisition and analysis for a Spinnaker (FLIR/Point Grey) camera,
-plus offline re-analysis of recorded growths.  Version 2.1.0.
+Live RHEED acquisition and analysis for whatever camera is on your chamber,
+plus offline re-analysis of recorded growths.  Version 2.2.0.
 
 ```
-main.py             Qt application — camera, display, ROIs, plots, settings, log
+main.py             Qt application — display, ROIs, plots, settings, log
+vrheed_cameras.py   Camera backends. One interface over FLIR, Basler, Allied
+                    Vision, GenICam, scientific cameras, USB, network streams,
+                    screen capture and a simulated source.
 vrheed_analysis.py  All physics and signal processing. No Qt, no OpenCV,
-                    no PySpin, so it runs and can be tested anywhere.
+                    no camera driver, so it runs and can be tested anywhere.
 test_analysis.py    84 self-checks with known answers.  python test_analysis.py
 test_app_smoke.py   End-to-end GUI test in file mode, no camera needed.
                     QT_QPA_PLATFORM=offscreen python test_app_smoke.py
-requirements.txt    Runtime dependencies (PySpin comes from the Spinnaker SDK)
+test_cameras.py     Camera backends and the source chooser, no camera needed.
+                    QT_QPA_PLATFORM=offscreen python test_cameras.py
+requirements.txt    Runtime dependencies; every camera driver is optional
 main.spec           PyInstaller build.  build.bat -> VRHEED.exe
 vrheed.log          Written next to the exe at run time (see Changes in 2.1)
 ```
+
+## Cameras
+
+VRHEED 2.2 talks to more than one kind of camera.  The **Source** box at the
+top of the *Camera* tab lists everything found on the machine; pick one and it
+connects.  *Camera ▸ Rescan* (F5) looks again after something is plugged in,
+and *Help ▸ Camera backends* shows which drivers are installed and what to
+install for the rest.
+
+| Camera | Backend | Install |
+|---|---|---|
+| FLIR / Point Grey — Blackfly, Grasshopper, Chameleon | Spinnaker | PySpin, from the FLIR Spinnaker SDK installer (not on PyPI) |
+| Basler — ace, ace 2, dart, boost | pylon | `pip install pypylon` |
+| Allied Vision — Manta, Alvium, Mako | Vimba X | `vmbpy`, from the Vimba X SDK |
+| Any other GigE Vision / USB3 Vision camera — IDS, Lucid, JAI, Baumer, Ximea, Matrix Vision, Photonfocus, Emergent | GenICam / GenTL | `pip install harvesters` plus any one vendor SDK for its `.cti` producer |
+| Andor iXon / Zyla, Hamamatsu ORCA, Princeton Instruments PIXIS, Photometrics, PCO, Thorlabs scientific | pylablib | `pip install pylablib` plus the vendor SDK |
+| NI IMAQ / IMAQdx frame grabbers — how a 1990s analogue RHEED camera gets digitised | pylablib | `pip install pylablib` plus NI-IMAQ |
+| USB webcams, USB microscope cameras, HDMI/composite capture dongles, analogue cameras on a USB frame grabber | USB / UVC | nothing — OpenCV is already a dependency |
+| IP cameras and re-streamed feeds (RTSP, HTTP-MJPEG) | Network | nothing; add the URL with *Camera ▸ Add network camera* |
+| A region of the desktop — the live-image pane of kSA 400, Staib or any vendor software that owns the camera exclusively | Screen capture | `pip install mss` |
+| Simulated RHEED pattern, for demos, teaching and tests | Synthetic | nothing |
+
+Nothing above is a hard dependency.  With none of them installed VRHEED still
+opens, still analyses recorded video and images, and still offers the USB,
+network and simulated sources — which is what you want on a laptop, and what a
+new user should meet before being asked to install a 1 GB vendor SDK.
+
+**The GenICam backend is the one to reach for when your camera is not listed.**
+Install any vendor's SDK for its GenTL producer and it will usually drive any
+other vendor's standards-compliant camera.  Set `GENICAM_GENTL64_PATH` to the
+folder holding the `.cti` file if the installer did not.
+
+`python vrheed_cameras.py` prints the backends and the cameras it can see —
+the first thing to run when a camera does not appear in the app.
+
+### What each backend can and cannot do
+
+Gain, exposure, frame rate and binning are enabled per camera; a control the
+camera cannot honour is greyed out rather than silently ignored.  Binning that
+the hardware cannot do is done in software (mean pooling) so the 1× / 2× / 4×
+buttons work on every source — the status line says which kind you got, since
+only hardware binning also reduces read noise and raises the frame rate.
+
+Two sources deserve their caveats stated plainly, and the app states them in
+the Source box when you connect:
+
+- **USB / UVC.** Gain and exposure are driver-dependent and approximate; the
+  units differ between DirectShow, V4L2 and AVFoundation and many webcams
+  ignore the request entirely.  On Windows, *Driver…* opens the camera's own
+  property sheet, which is the reliable way to turn auto-exposure off — and
+  auto-exposure must be off, because every auto step puts an edge in the
+  intensity trace that looks exactly like a growth transient.
+- **Screen capture and network streams.** You are measuring a display or a
+  compressed video, so relative changes and oscillation timing survive but
+  absolute intensities do not.  For screen capture the frame rate is the
+  capture rate, not the camera's, so the FFT frequency axis is only as good as
+  what the vendor software is drawing.
+
+On macOS, the USB and screen-capture backends need camera and screen-recording
+permission in *System Settings ▸ Privacy & Security*.
+
+### Auto-connect
+
+VRHEED reconnects to the camera it used last session when it is still there.
+Otherwise it takes the first real camera it finds — never the simulated source
+and never a screen region, both of which would happily produce frames and look
+exactly like a working camera.
+
+## Changes in 2.2
+
+**More than one kind of camera.** The camera layer moved out of `main.py` into
+`vrheed_cameras.py` behind a single `CameraBackend` interface, and nine
+backends were written against it — see [Cameras](#cameras) above. `main.py` no
+longer contains the word `PySpin`: it asks the backend for a frame and the
+backend deals with buffer release, incomplete frames, colour sensors and
+binning. Adding a tenth camera is a subclass and one line in `BACKENDS`.
+
+Alongside it: a source chooser in the *Camera* tab with rescan and connect, a
+*Camera* menu, *Help ▸ Camera backends* listing what is installed and what to
+install, capability-driven controls (a camera that has no gain node no longer
+offers a gain slider that does nothing), control ranges read from the camera,
+a resolution chooser for USB cameras, software binning so 1×/2×/4× works on
+every source, per-camera metadata in exported CSV headers, and reconnection to
+the camera used last session.
 
 ## Changes in 2.1
 
@@ -270,6 +359,7 @@ tab. v1 and v2 files still load.
 ```bash
 python test_analysis.py
 QT_QPA_PLATFORM=offscreen python test_app_smoke.py
+QT_QPA_PLATFORM=offscreen python test_cameras.py
 ```
 
 `test_analysis.py` (also collectable by `pytest`) checks the electron
@@ -286,12 +376,32 @@ and checks one sample per frame, the recovered rate, CSV export, session
 save/load in all three versions, seek truncation, that a bad frame is logged
 once and does not stop the loop, that the excepthook is safe from a worker
 thread, and that settings round-trip through a sandboxed `QSettings` file.
-Both exit non-zero on failure, so they can gate a build.
+`test_cameras.py` covers the camera layer without hardware. A stubbed PySpin
+stands in for the Blackfly S on the MBE and checks the whole FLIR sequence
+against what 2.1 did: lookup by serial, every auto control off with the SDK's
+own integer constants and in the right order, gain in dB and exposure in
+microseconds, control ranges rounded inward so a 47.99 dB maximum never comes
+back as 48.0, incomplete frames dropped, every image released, binning
+resetting the sensor window, and shutdown unwinding EndAcquisition → DeInit →
+ReleaseInstance. Beyond that it covers: software binning
+against a hand-computed mean, mono conversion of BGR/BGRA/16-bit frames, the
+synthetic source actually oscillating at its documented 0.25 Hz, a fake camera
+that maxes out at 2× binning still delivering 4×, a control setter that raises
+being contained, stream-URL storage with the password kept out of the label,
+and — through the real GUI — auto-connect preferring hardware over the
+simulator, panel values being pushed to a newly connected camera, switching
+cameras releasing the old one, and a camera that refuses to open leaving the
+app usable and saying why.
+
+All three exit non-zero on failure, so they can gate a build.
 
 Note the strain sign convention: **narrower streaks mean a larger in-plane
 lattice constant**, since `a = K/Δx`.
 
 ## Compared with the kSA 400
+
+Not covered by the kSA 400 at all: it drives its own camera and nothing else.
+VRHEED works with whatever is on the chamber — see [Cameras](#cameras).
 
 Covered: growth rate (all three of their methods), lattice spacing, strain
 evolution, FWHM / in-plane coherence length, multiple simultaneous window

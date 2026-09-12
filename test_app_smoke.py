@@ -12,6 +12,7 @@ Exit status is non-zero on any failure, so it can gate a build.
 """
 
 import os
+import re
 import sys
 import csv
 import json
@@ -114,7 +115,10 @@ win.show()
 pump(app, 0.2)
 check("opens in file-analysis mode without PySpin",
       win.source_mode == 'camera' and win.cam is None)
-check("version string present", main.__version__ == "2.1.0", main.__version__)
+# A version, not a particular one: the CSV and session writers stamp it, so
+# what matters is that it is there and looks like a release number.
+check("version string present",
+      bool(re.fullmatch(r"\d+\.\d+\.\d+", main.__version__)), main.__version__)
 
 # --- replay every frame at 10x ----------------------------------------------
 

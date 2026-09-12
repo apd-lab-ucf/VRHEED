@@ -1,0 +1,211 @@
+VRHEED 2.2.0 — running from source on Windows
+=============================================
+
+1.  Install Python 3.11 or 3.12 from python.org.
+    Tick "Add python.exe to PATH" on the first installer screen.
+
+    Not 3.13: PySpin wheels are built per Python version and FLIR's
+    newest at the time of writing is 3.10/3.11.  Match whatever your
+    Spinnaker SDK ships.
+
+2.  Open a terminal in this folder (Shift+right-click the folder ->
+    "Open PowerShell window here", or type  cmd  in the Explorer
+    address bar for Command Prompt).
+
+    THE ACTIVATION COMMAND IS DIFFERENT IN THE TWO SHELLS.  Windows
+    Terminal, VS Code and Shift+right-click all give you PowerShell.
+
+    PowerShell:
+
+        python -m venv .venv
+        .\.venv\Scripts\Activate.ps1
+        pip install -r requirements.txt
+
+    The leading  .\  is required -- without it PowerShell says
+    "The module '.venv' could not be loaded".  If it instead says
+    running scripts is disabled on this system, allow it for this
+    window only:
+
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+    Command Prompt:
+
+        python -m venv .venv
+        .venv\Scripts\activate.bat
+        pip install -r requirements.txt
+
+    Either way the prompt gains a  (.venv)  prefix.  If it does not,
+    activation did not happen and pip will install into the wrong
+    Python.
+
+    A venv is optional.  If you would rather use the Python you
+    already have, skip straight to:
+
+        pip install -r requirements.txt
+
+3.  Install PySpin for the FLIR camera.  It is NOT on PyPI — it comes
+    with the Spinnaker SDK installer:
+
+        C:\Program Files\FLIR Systems\Spinnaker\bin64\vs2015\...
+
+    Look for a folder of .whl files (often under a "python" subfolder
+    of the Spinnaker install or the downloaded SDK archive), and:
+
+        pip install spinnaker_python-<version>-cp311-cp311-win_amd64.whl
+
+    The cp311 part must match your Python version.
+
+4.  Check what VRHEED can see before you run it.  This takes about a
+    second and prints the camera drivers found and the cameras found:
+
+        python vrheed_cameras.py
+
+    If no FLIR camera is listed it automatically adds a step-by-step
+    FLIR diagnosis at the end (you can force it with --flir).  That
+    section separates the four causes that all look like "no camera"
+    from inside the app:
+
+      * PySpin import FAILED / No module named 'PySpin'
+            Step 3 did not take, or it installed into a different
+            Python than this one.  The report prints which Python it
+            is using -- compare with where you ran pip.
+
+      * PySpin is installed but will not load
+            The wheel loaded but its DLLs did not.  Almost always the
+            Spinnaker SDK runtime is missing or is a different version
+            than the wheel.  Confirm SpinView opens the camera, then
+            reinstall the wheel that shipped with THAT SDK version.
+
+      * Cameras reported by Spinnaker: 0
+            Spinnaker itself cannot see the camera, so this is not a
+            VRHEED problem.  Open SpinView -- if it cannot see the
+            camera either, check cable, power, and that the camera is
+            on a USB3 port with the FLIR USB driver installed.  For
+            GigE, check the NIC subnet or use SpinView > Action >
+            Auto Force IP.
+
+      * The camera IS listed but VRHEED will not connect
+            Something else has it open.  Close SpinView and any other
+            copy of VRHEED.  Spinnaker allows one owner at a time.
+
+    You want a line like:
+
+        [x] FLIR Spinnaker
+        spinnaker:21055099   FLIR Blackfly S BFS-U3-51S5M [21055099]
+
+    If the FLIR line says PySpin not installed, step 3 did not take —
+    most often the wheel was built for a different Python version.
+
+5.  Run it:
+
+        python main.py
+
+    The Source box at the top of the Camera tab should already say
+    "Connected · FLIR Spinnaker".  If it does not, press the refresh
+    button next to the camera list.
+
+
+Before trusting a growth
+------------------------
+Run the self-tests.  They need no camera and take about a minute.
+The camera suite includes a stubbed PySpin that checks the whole FLIR
+sequence — autos off, gain in dB, exposure in microseconds, binning,
+clean shutdown — but it cannot check YOUR PySpin build, which is what
+step 4 above is for.
+
+    python test_analysis.py
+    python test_app_smoke.py
+    python test_cameras.py
+
+All three print "all checks passed" and exit 0 on success.
+
+
+Building the .exe (optional)
+----------------------------
+You do NOT need the exe to use VRHEED.  "python main.py" from the venv
+is the same program.  Build only when you want to hand it to someone
+who will not install Python.
+
+The venv MUST still be activated.  PyInstaller bundles whatever the
+Python running it can import, so a global pyinstaller.exe building a
+venv project produces an exe that dies on launch.
+
+    .venv\Scripts\activate
+    pip install pyinstaller
+    build.bat
+
+build.bat calls "python -m PyInstaller" rather than bare "pyinstaller"
+so it always uses the active environment, and main.spec refuses to
+build at all if that environment cannot import cv2, numpy, scipy,
+PyQt5 and pyqtgraph.
+
+The build bundles whichever camera drivers are installed at build
+time, so install PySpin (step 3) BEFORE building or the exe will have
+no FLIR support.  The build prints which drivers it bundled -- read
+that line.
+
+Always launch the exe once before trusting it.  A missing dependency
+does not fail the build, only the launch.
+
+
+If something goes wrong
+-----------------------
+"The module '.venv' could not be loaded"
+    You are in PowerShell and left off the leading  .\  -- see step 2.
+    PowerShell will not run a script from the current directory
+    unless the path starts with  .\
+
+"cannot be loaded because running scripts is disabled on this system"
+    PowerShell's execution policy.  For this window only:
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+"No module named 'pyqtgraph'" (or PyQt5, scipy, cv2) running main.py
+    Step 2 did not take, or it installed into a different Python than
+    the one you are running.  VRHEED now tells you which Python it is
+    using when this happens.  Check they match:
+
+        python -c "import sys; print(sys.executable)"
+        pip -V
+
+    Then, with the venv activated if you made one:
+
+        pip install -r requirements.txt
+
+"No module named 'cv2'" in a PyInstaller error dialog
+    The exe was built by a Python that had no opencv-python.  Almost
+    always a global pyinstaller.exe building a venv project.  Activate
+    the venv and rebuild; the spec now stops this with a clear message.
+    To check which Python you are actually using:
+
+        where python
+        python -c "import cv2, sys; print(sys.executable, cv2.__version__)"
+
+"No module named 'cv2'" running python main.py
+    Step 2 did not take.  Activate the venv and run
+    pip install -r requirements.txt again.
+
+The app opens but the Camera tab says no camera found
+    Run "python vrheed_cameras.py" (step 4).  It prints why each
+    driver is unavailable and, when no FLIR is found, walks through
+    the FLIR causes one at a time.  Help > Camera backends inside the
+    app shows the same driver list.
+
+VRHEED opens in file-analysis mode with PySpin installed
+    Either the wheel is for a different Python version, or it loaded
+    but its DLLs did not.  Step 4 now tells these apart -- "not
+    installed" and "installed but will not load" need different
+    fixes.  Check python --version against the cpXX in the wheel
+    filename.
+
+Nothing is wrong but you want to try the app anyway
+    Pick "Simulated RHEED pattern" in the Source box.  It draws a
+    RHEED pattern whose specular spot oscillates at exactly 0.25 Hz,
+    so you can lay down an ROI and confirm the growth rate reads
+    4.00 s/ML without any hardware at all.
+
+
+Other cameras
+-------------
+See the Cameras table in README.md, or Help > Camera backends inside
+the app.  Nothing beyond step 2 is needed for USB cameras, network
+streams or the simulated source.

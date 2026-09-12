@@ -26,7 +26,13 @@ import traceback
 from datetime import datetime
 from collections import deque
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
+
+
+def _installed_backends():
+    """Comma-separated names of the camera drivers present, for the About box."""
+    names = [name for name, ok, _ in vcam.backend_status() if ok]
+    return ", ".join(names) if names else "none"
 
 
 def _resource(filename):
@@ -111,31 +117,60 @@ def _install_excepthook():
             a.exc_type, a.exc_value, a.exc_traceback)
 
 
-import cv2
-import numpy as np
+def _missing_dependency(exc):
+    """Turn a bare ImportError into something the operator can act on.
 
-# PySpin is optional: without it VRHEED still opens and can analyse recorded
-# video and image files, which is how you work on a laptop away from the MBE.
+    A raw "ModuleNotFoundError: No module named 'pyqtgraph'" tells someone who
+    just wants to look at a RHEED pattern nothing at all.  Name the package as
+    pip spells it -- cv2 is opencv-python, which nobody guesses -- and give the
+    one command that fixes every case.
+    """
+    name = getattr(exc, 'name', None) or str(exc)
+    pip_name = {'cv2': 'opencv-python', 'np': 'numpy'}.get(name, name)
+    return (
+        f"\nVRHEED cannot start: the Python package '{pip_name}' is not installed.\n\n"
+        f"  Python in use: {sys.executable}\n\n"
+        "Install everything VRHEED needs with:\n\n"
+        "    pip install -r requirements.txt\n\n"
+        "If you made a virtual environment, activate it FIRST, or pip installs\n"
+        "into a different Python than the one running this file:\n\n"
+        "    PowerShell     .\\.venv\\Scripts\\Activate.ps1\n"
+        "    Command Prompt .venv\\Scripts\\activate.bat\n")
+
+
 try:
-    import PySpin
-    HAVE_PYSPIN = True
-except Exception:
-    PySpin = None
-    HAVE_PYSPIN = False
+    import cv2
+    import numpy as np
+except ImportError as _e:
+    raise SystemExit(_missing_dependency(_e))
+
+# Camera support lives in its own module: FLIR/Spinnaker, Basler pylon,
+# Allied Vision Vimba, any GenICam camera through a GenTL producer, scientific
+# cameras and frame grabbers through pylablib, USB/UVC devices, network
+# streams, screen capture, and a simulated source for demos and tests.  Every
+# vendor driver is imported lazily inside its own backend, so VRHEED starts
+# with none of them installed -- which is how you work on a laptop away from
+# the MBE, analysing recorded video and images.
+import vrheed_cameras as vcam
+from vrheed_cameras import CameraError
 
 import vrheed_analysis as va
 
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QSplitter,
-    QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
-    QSlider, QPushButton, QRadioButton, QButtonGroup,
-    QFileDialog, QMessageBox, QSizePolicy, QDoubleSpinBox,
-    QCheckBox, QComboBox, QTabWidget, QSpinBox, QStatusBar, QAction,
-)
-from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, QSettings, QByteArray
-from PyQt5.QtGui import QImage, QPixmap, QIcon, QGuiApplication
+try:
+    from PyQt5.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QLabel, QSplitter,
+        QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox,
+        QSlider, QPushButton, QRadioButton, QButtonGroup,
+        QFileDialog, QMessageBox, QSizePolicy, QDoubleSpinBox,
+        QCheckBox, QComboBox, QTabWidget, QSpinBox, QStatusBar, QAction,
+        QDialog, QDialogButtonBox, QInputDialog,
+    )
+    from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, QSettings, QByteArray
+    from PyQt5.QtGui import QImage, QPixmap, QIcon, QGuiApplication
 
-import pyqtgraph as pg
+    import pyqtgraph as pg
+except ImportError as _e:
+    raise SystemExit(_missing_dependency(_e))
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +285,68 @@ class CameraLabel(QLabel):
         self.sig_wheel.emit(e.x(), e.y(), e.angleDelta().y())
 
 
+class ScreenRegionDialog(QDialog):
+    """Pick the rectangle of the desktop the screen-capture source reads.
+
+    Coordinates are relative to the chosen monitor's top-left corner, which is
+    what a user reads off a screenshot; the backend adds the monitor's own
+    offset.  "Whole screen" is there because the first thing anyone does is
+    try it, see the toolbars, and then want to crop.
+    """
+
+    def __init__(self, parent, monitor_index, region=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Screen {monitor_index} capture region")
+        mon_w, mon_h = self._monitor_size(monitor_index)
+        x, y, w, h = region or (0, 0, mon_w, mon_h)
+
+        grid = QGridLayout()
+        self._spins = {}
+        for row, (key, label, val, hi) in enumerate((
+                ('x', "Left (px):",   x, mon_w), ('y', "Top (px):",    y, mon_h),
+                ('w', "Width (px):",  w, mon_w), ('h', "Height (px):", h, mon_h))):
+            grid.addWidget(QLabel(label), row, 0, alignment=Qt.AlignRight)
+            sp = QSpinBox()
+            sp.setRange(1 if key in ('w', 'h') else 0, max(hi, 1))
+            sp.setValue(int(val))
+            grid.addWidget(sp, row, 1)
+            self._spins[key] = sp
+
+        btn_full = QPushButton("Whole screen")
+        btn_full.clicked.connect(lambda: self._set(0, 0, mon_w, mon_h))
+        grid.addWidget(btn_full, 4, 0, 1, 2)
+
+        hint = QLabel(
+            "Frame the live-image pane of whatever program owns the camera.\n"
+            "You are measuring its display, so relative changes are valid and\n"
+            "absolute intensities are not.")
+        hint.setStyleSheet("color:#7f8c8d;")
+        grid.addWidget(hint, 5, 0, 1, 2)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        grid.addWidget(buttons, 6, 0, 1, 2)
+        self.setLayout(grid)
+
+    @staticmethod
+    def _monitor_size(index):
+        try:
+            import mss
+            with mss.mss() as sct:
+                mon = sct.monitors[index]
+                return int(mon['width']), int(mon['height'])
+        except Exception:
+            return 3840, 2160
+
+    def _set(self, x, y, w, h):
+        for key, val in zip(('x', 'y', 'w', 'h'), (x, y, w, h)):
+            self._spins[key].setValue(int(val))
+
+    def region(self):
+        return tuple(self._spins[k].value() for k in ('x', 'y', 'w', 'h'))
+
+
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
@@ -265,10 +362,13 @@ class VRHEED_App(QMainWindow):
         global _MAIN_WINDOW
         _MAIN_WINDOW = self
         logger.info("VRHEED %s starting - Python %s, numpy %s, OpenCV %s, "
-                    "PySpin %s, frozen=%s, log=%s",
+                    "frozen=%s, log=%s",
                     __version__, platform.python_version(), np.__version__,
-                    cv2.__version__, "available" if HAVE_PYSPIN else "absent",
+                    cv2.__version__,
                     bool(getattr(sys, 'frozen', False)), LOG_PATH)
+        logger.info("Camera backends: %s",
+                    ", ".join(f"{n}={'yes' if ok else 'no'}"
+                              for n, ok, _ in vcam.backend_status()))
         self.setWindowTitle("VRHEED - Precision Analyzer")
         self.setWindowIcon(QIcon(_resource("turtle.ico")))
 
@@ -281,18 +381,13 @@ class VRHEED_App(QMainWindow):
         self.resize(max(w, 1000), max(h, 650))
         self.setMinimumSize(1000, 650)
 
-        # Spinnaker (optional)
-        self.system = None
-        if HAVE_PYSPIN:
-            try:
-                self.system = PySpin.System.GetInstance()
-            except Exception as e:
-                QMessageBox.warning(
-                    None, "Driver Warning",
-                    f"Spinnaker SDK present but failed to start:\n{e}\n\n"
-                    "VRHEED will open in file-analysis mode.")
-
+        # Camera.  self.cam is a vrheed_cameras.CameraBackend once connected,
+        # None otherwise; nothing outside _connect_camera / _disconnect_camera
+        # assigns it, so "is there a camera?" is one check everywhere else.
         self.cam = None
+        self.cam_info = None            # CameraInfo of the connected camera
+        self._cameras = []              # everything the last scan found
+        self._last_cam_key = ""         # key to reconnect to next session
         self.source_mode = 'camera'     # 'camera' | 'file'
 
         # ROI state — boxes stored as NORMALIZED coords (0-1 fraction of frame).
@@ -538,7 +633,11 @@ class VRHEED_App(QMainWindow):
         self.tabs.addTab(self._build_lattice_tab(),  "Lattice")
         self.tabs.addTab(self._build_sim_tab(),      "Simulate")
         self.tabs.setMinimumHeight(230)
-        self.tabs.setMaximumHeight(300)
+        # 2.2: raised from 300 to fit the Source chooser on the Camera tab.
+        # The cap is what stops the control dashboard growing until the plots
+        # are pushed off the bottom of the window, so it is deliberately only
+        # as large as the tallest tab now needs.
+        self.tabs.setMaximumHeight(340)
         dash_layout.addWidget(self.tabs)
 
         dash_layout.addWidget(self._build_metrics_group())
@@ -705,6 +804,22 @@ class VRHEED_App(QMainWindow):
         m.addSeparator()
         act(m, "E&xit", self.close, "Ctrl+Q")
 
+        m = mb.addMenu("&Camera")
+        act(m, "&Rescan for cameras", lambda: self._refresh_cameras(), "F5",
+            "Look for cameras again after plugging one in")
+        act(m, "&Disconnect camera", self._disconnect_camera, None,
+            "Release the camera so another program can use it")
+        m.addSeparator()
+        act(m, "Add &network camera…", self._add_network_camera, None,
+            "Add an RTSP or HTTP-MJPEG stream by URL")
+        act(m, "Remove network camera…", self._remove_network_camera, None,
+            "Forget a stream URL added earlier")
+        act(m, "&Screen capture region…", self._set_screen_region, None,
+            "Choose which part of the desktop the Screen source reads")
+        m.addSeparator()
+        act(m, "Driver settings…", self._open_driver_dialog, None,
+            "The camera driver's own dialog, where it has one")
+
         m = mb.addMenu("&View")
         act(m, "&Pause / Resume", self._toggle_pause, "Space")
         act(m, "&Reset zoom", self._reset_zoom, "Ctrl+0")
@@ -726,6 +841,8 @@ class VRHEED_App(QMainWindow):
 
         m = mb.addMenu("&Help")
         act(m, "Mouse && keyboard…", self._show_help, "F1")
+        act(m, "Camera &backends…", self._show_backends, None,
+            "Which camera drivers are installed, and how to add the rest")
         act(m, "About VRHEED", self._show_about)
 
     # -- tabs ----------------------------------------------------------------
@@ -733,10 +850,14 @@ class VRHEED_App(QMainWindow):
     def _build_camera_tab(self):
         page = QWidget()
         cfg = QGridLayout(page)
-        cfg.setSpacing(4)
+        # 2 rather than the 4 the other tabs use: the Source group added in 2.2
+        # costs this tab a row, and the tab height is capped so that the plots
+        # below keep their space.
+        cfg.setSpacing(2)
+        cfg.addWidget(self._build_source_group(), 0, 0, 1, 3)
 
         self.gain_slider, self.gain_spin = self._param_row(
-            cfg, 0, "Gain:", 0.0, 40.0, 15.0, scale=10)
+            cfg, 1, "Gain:", 0.0, 40.0, 15.0, scale=10)
         self.gain_slider.valueChanged.connect(
             lambda v: (self.gain_spin.setValue(v / 10.0), self._on_gain(v / 10.0)))
         self.gain_spin.valueChanged.connect(
@@ -746,7 +867,7 @@ class VRHEED_App(QMainWindow):
                        self._on_gain(v)))
 
         self.exp_slider, self.exp_spin = self._param_row(
-            cfg, 1, "Exp (ms):", 1.0, 100000.0, 100.0, scale=1)
+            cfg, 2, "Exp (ms):", 1.0, 100000.0, 100.0, scale=1)
         self.exp_slider.valueChanged.connect(
             lambda v: (self.exp_spin.setValue(float(v)), self._on_exp(float(v))))
         self.exp_spin.valueChanged.connect(
@@ -773,7 +894,7 @@ class VRHEED_App(QMainWindow):
             fb_row.addWidget(rb)
             self._bin_group.addButton(rb, val)
         fb_row.addStretch()
-        cfg.addLayout(fb_row, 2, 0, 1, 3)
+        cfg.addLayout(fb_row, 3, 0, 1, 3)
 
         # Rotation row
         rot_row = QHBoxLayout()
@@ -800,7 +921,7 @@ class VRHEED_App(QMainWindow):
         self.rot_fine_spin.valueChanged.connect(self._on_rot_fine_changed)
         rot_row.addWidget(self.rot_fine_spin)
         rot_row.addStretch()
-        cfg.addLayout(rot_row, 3, 0, 1, 3)
+        cfg.addLayout(rot_row, 4, 0, 1, 3)
 
         # Reference row
         ref_row = QHBoxLayout()
@@ -819,10 +940,85 @@ class VRHEED_App(QMainWindow):
         self.ref_label.setStyleSheet("color:#bdc3c7;")
         ref_row.addWidget(self.ref_label)
         ref_row.addStretch()
-        cfg.addLayout(ref_row, 4, 0, 1, 3)
+        cfg.addLayout(ref_row, 5, 0, 1, 3)
 
-        cfg.setRowStretch(5, 1)
+        cfg.setRowStretch(6, 1)
         return page
+
+    def _build_source_group(self):
+        """Which camera the live view comes from.
+
+        Kept at the top of the Camera tab rather than buried in a dialog: on a
+        system with more than one camera on the chamber, picking the right one
+        is the first thing an operator does, and after a cable is re-seated it
+        is the first thing they do again.
+        """
+        box = QGroupBox("Source")
+        box.setStyleSheet(GROUP_QSS)
+        v = QVBoxLayout(box)
+        v.setSpacing(3)
+        # Tighter than the default margins: this group sits on top of an
+        # already-full tab, and every pixel it takes comes off the plots.
+        v.setContentsMargins(6, 4, 6, 4)
+
+        row = QHBoxLayout()
+        self.cam_combo = QComboBox()
+        self.cam_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.cam_combo.setToolTip(
+            "Cameras found on this machine.\n"
+            "Help ▸ Camera backends lists what VRHEED can talk to and what is "
+            "missing.")
+        self.cam_combo.activated.connect(self._on_camera_selected)
+        row.addWidget(self.cam_combo, 1)
+        self.btn_cam_refresh = QPushButton("⟳")
+        self.btn_cam_refresh.setFixedWidth(30)
+        self.btn_cam_refresh.setToolTip("Scan for cameras again")
+        self.btn_cam_refresh.clicked.connect(lambda: self._refresh_cameras())
+        row.addWidget(self.btn_cam_refresh)
+        self.btn_cam_connect = QPushButton("Connect")
+        self.btn_cam_connect.setFixedWidth(95)
+        self.btn_cam_connect.setStyleSheet("background:#16a085;color:white;")
+        self.btn_cam_connect.clicked.connect(self._toggle_connection)
+        row.addWidget(self.btn_cam_connect)
+        v.addLayout(row)
+
+        # The resolution row is only meaningful for the backends that offer a
+        # choice (USB cameras, essentially), so it lives in its own widget and
+        # is hidden the rest of the time rather than sitting there greyed out
+        # -- the Camera tab has no vertical space to spare.
+        self.res_row = QWidget()
+        row2 = QHBoxLayout(self.res_row)
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.addWidget(QLabel("Resolution:"))
+        self.res_combo = QComboBox()
+        self.res_combo.setEnabled(False)
+        self.res_combo.setToolTip(
+            "Sensor sizes this camera accepts.\n"
+            "USB cameras default to 640×480 whatever the sensor can do, and "
+            "those missing pixels are missing streak-spacing resolution.")
+        self.res_combo.activated.connect(self._on_resolution_selected)
+        row2.addWidget(self.res_combo, 1)
+        self.btn_driver = QPushButton("Driver…")
+        self.btn_driver.setFixedWidth(70)
+        self.btn_driver.setEnabled(False)
+        self.btn_driver.setToolTip(
+            "Open the driver's own settings dialog (Windows USB cameras).\n"
+            "The reliable place to turn a webcam's auto-exposure off.")
+        self.btn_driver.clicked.connect(self._open_driver_dialog)
+        row2.addWidget(self.btn_driver)
+        self.res_row.setVisible(False)
+        v.addWidget(self.res_row)
+
+        self.cam_status_label = QLabel("Searching for cameras…")
+        self.cam_status_label.setWordWrap(True)
+        # Two lines' worth, claimed up front: the Camera tab is dense enough
+        # that an unconstrained label gets squeezed to one line by the grid,
+        # and the second line is the one carrying the backend's caveat.
+        self.cam_status_label.setMinimumHeight(
+            2 * self.cam_status_label.fontMetrics().height())
+        self.cam_status_label.setStyleSheet("color:#bdc3c7;")
+        v.addWidget(self.cam_status_label)
+        return box
 
     def _build_display_tab(self):
         page = QWidget()
@@ -1186,18 +1382,15 @@ class VRHEED_App(QMainWindow):
 
     def _on_gain(self, v):
         if self.cam:
-            try: self.cam.Gain.SetValue(float(v))
-            except Exception: pass
+            self.cam.set_gain(v)
 
     def _on_exp(self, v):
         if self.cam:
-            try: self.cam.ExposureTime.SetValue(float(v) * 1000)
-            except Exception: pass
+            self.cam.set_exposure_ms(v)
 
     def _on_target_fps(self, v):
         if self.cam:
-            try: self.cam.AcquisitionFrameRate.SetValue(float(v))
-            except Exception: pass
+            self.cam.set_frame_rate(v)
         self._on_history_changed()
 
     def _set_reference(self):
@@ -1274,18 +1467,15 @@ class VRHEED_App(QMainWindow):
         self._reset_averaging()
         self.reference_frame = None
         self._clear_reference()
+        how = ""
         try:
-            max_bin = int(self.cam.BinningHorizontal.GetMax())
-            n = min(n, max_bin)
-            self.cam.BinningHorizontal.SetValue(n)
-            self.cam.BinningVertical.SetValue(n)
-            try:
-                self.cam.OffsetX.SetValue(0)
-                self.cam.OffsetY.SetValue(0)
-                self.cam.Width.SetValue(self.cam.Width.GetMax())
-                self.cam.Height.SetValue(self.cam.Height.GetMax())
-            except Exception:
-                pass
+            self.cam.set_binning(n)
+            # A camera with no binning node still bins -- in software, in the
+            # backend -- and so does one that caps out at 2x when asked for 4x.
+            # Say which, because only hardware binning also buys the read-noise
+            # reduction and the higher frame rate.
+            if self.cam.binning_is_software:
+                how = " (software)"
         except Exception as e:
             QMessageBox.warning(self, "Binning", f"Could not set binning: {e}")
         # Anything still queued is at the old resolution and would be drawn
@@ -1294,8 +1484,8 @@ class VRHEED_App(QMainWindow):
         self._start_acquisition()
         self.ui_timer.start(16)
         self.statusBar().showMessage(
-            f"Binning {n}×{n} — pixel pitch on the Lattice tab is now {n}× larger.",
-            6000)
+            f"Binning {n}×{n}{how} — pixel pitch on the Lattice tab is now "
+            f"{n}× larger.", 6000)
 
     def _toggle_pause(self):
         self.paused = not self.paused
@@ -1314,105 +1504,400 @@ class VRHEED_App(QMainWindow):
     # -----------------------------------------------------------------------
 
     def _init_camera(self):
-        if self.system is None:
-            self._set_camera_controls_enabled(False)
-            self.statusBar().showMessage(
-                "No Spinnaker SDK — File ▸ Open Video to analyse a recording.",
-                0)
-            return
-        cams = self.system.GetCameras()
-        if cams.GetSize() == 0:
-            self._set_camera_controls_enabled(False)
-            self.statusBar().showMessage(
-                "No camera found — File ▸ Open Video to analyse a recording.", 0)
-            return
-        self.cam = cams[0]
+        """Find the cameras on this machine and connect to one."""
+        self._refresh_cameras(auto_connect=True)
+
+    # -- source chooser ----------------------------------------------------
+
+    def _refresh_cameras(self, auto_connect=False):
+        """Re-scan every backend and repopulate the source list.
+
+        Enumeration opens and closes each USB device in turn, so it takes a
+        second or two; it happens at start-up, and after that only when the
+        operator asks.  A camera already connected is left alone -- re-scanning
+        must never interrupt a growth.
+        """
+        self.cam_status_label.setText("Searching for cameras…")
+        self.statusBar().showMessage("Searching for cameras…")
+        QApplication.processEvents()
         try:
-            self.cam.Init()
+            self._cameras = vcam.enumerate_cameras()
+        except Exception:
+            logger.exception("Camera enumeration failed")
+            self._cameras = []
+        logger.info("Found %d camera(s): %s", len(self._cameras),
+                    ", ".join(c.key for c in self._cameras))
+
+        self.cam_combo.blockSignals(True)
+        self.cam_combo.clear()
+        for info in self._cameras:
+            self.cam_combo.addItem(info.label, info.key)
+        if not self._cameras:
+            self.cam_combo.addItem("No camera found", "")
+        self.cam_combo.blockSignals(False)
+
+        # Keep the combo pointing at the connected camera if it survived.
+        current = self.cam_info.key if self.cam_info else self._last_cam_key
+        idx = self.cam_combo.findData(current) if current else -1
+        if idx >= 0:
+            self.cam_combo.setCurrentIndex(idx)
+
+        if not auto_connect or self.cam is not None:
+            self._update_source_status()
+            self.statusBar().clearMessage()
+            return
+
+        target = vcam.find_camera(self._last_cam_key, self._cameras)
+        if target is None:
+            # First real camera.  Never the simulated source or a screen
+            # region: both would happily produce frames and look exactly like
+            # a working camera, which is the last thing you want to discover
+            # halfway through a growth.
+            target = next((c for c in self._cameras
+                           if c.backend_id not in ('synthetic', 'screen')), None)
+        if target is not None:
+            self.cam_combo.setCurrentIndex(
+                max(0, self.cam_combo.findData(target.key)))
+            self._connect_camera(target)
+        else:
+            self._set_camera_controls_enabled(False)
+            self._update_source_status()
+            self.statusBar().showMessage(
+                "No camera found — pick a source above, or File ▸ Open Video "
+                "to analyse a recording.", 0)
+
+    def _on_camera_selected(self, _index):
+        """Combo activated by the user: connect straight away.
+
+        Choosing a camera and then having to press Connect is a step nobody
+        remembers; the button stays for the disconnect direction.
+        """
+        info = self._selected_camera()
+        if info is not None and (self.cam_info is None or info != self.cam_info):
+            self._connect_camera(info)
+
+    def _selected_camera(self):
+        key = self.cam_combo.currentData()
+        return vcam.find_camera(key, self._cameras) if key else None
+
+    def _toggle_connection(self):
+        if self.cam is not None:
+            self._disconnect_camera()
+            self.statusBar().showMessage("Camera disconnected.", 4000)
+            self._update_source_status()
+        else:
+            info = self._selected_camera()
+            if info is None:
+                self._refresh_cameras(auto_connect=True)
+            else:
+                self._connect_camera(info)
+
+    def _connect_camera(self, info):
+        """Open ``info`` and start streaming from it.  Returns True on success."""
+        self._disconnect_camera()
+        try:
+            cam = vcam.open_camera(info)
+        except CameraError as e:
+            logger.warning("Could not open %s: %s", info.key, e)
+            QMessageBox.critical(self, "Camera",
+                                 f"Could not open {info.label}:\n\n{e}")
+            self._set_camera_controls_enabled(False)
+            self._update_source_status(f"Could not open {info.label}")
+            return False
+
+        self.cam = cam
+        self.cam_info = info
+        self._last_cam_key = info.key
+        # Keep the chooser honest however we got here -- auto-connect at
+        # start-up and the screen-region dialog both call this directly.
+        idx = self.cam_combo.findData(info.key)
+        if idx >= 0 and idx != self.cam_combo.currentIndex():
+            self.cam_combo.blockSignals(True)
+            self.cam_combo.setCurrentIndex(idx)
+            self.cam_combo.blockSignals(False)
+        self._reset_averaging()
+        self._clear_reference()
+        self._apply_control_ranges(cam)
+        self._set_camera_controls_enabled(True)
+        self._populate_resolutions()
+
+        # Push the panel's current values down to the new camera, so what the
+        # controls say is what the camera is doing.
+        cam.set_gain(self.gain_spin.value())
+        cam.set_exposure_ms(self.exp_spin.value())
+        cam.set_frame_rate(self.fps_spin.value())
+        cam.set_binning(self._bin_group.checkedId() or 1)
+
+        self.btn_cam_connect.setText("Disconnect")
+        self._update_source_status()
+        logger.info("Connected to %s", info.key)
+        if self.source_mode == 'camera':
+            self._drain_frame_queue()
+            self._start_acquisition()
+            self.statusBar().showMessage(f"Connected to {info.label}.", 5000)
+        else:
+            self.statusBar().showMessage(
+                f"Connected to {info.label} — File ▸ Return to Camera to view it.",
+                6000)
+        # The long form of the caveat, once, where there is room to read it.
+        if cam.note_detail:
+            QTimer.singleShot(
+                1200, lambda d=cam.note_detail: self.statusBar().showMessage(d, 12000))
+        return True
+
+    def _disconnect_camera(self):
+        if self.cam is None:
+            return
+        self._stop_capture()
+        try:
+            self.cam.close()
+        except Exception:
+            logger.exception("Error closing camera")
+        self.cam = None
+        self.cam_info = None
+        self._set_camera_controls_enabled(False)
+        self.btn_cam_connect.setText("Connect")
+
+    def _apply_control_ranges(self, cam):
+        """Clamp the gain / exposure / FPS controls to what this camera allows.
+
+        A slider that runs to 40 dB on a camera whose maximum is 24 invites an
+        operator to set a value the camera silently ignores, and then the panel
+        and the sensor disagree for the rest of the session.
+        """
+        for lo_hi, slider, spin, scale in (
+                (cam.gain_range, self.gain_slider, self.gain_spin, 10),
+                (cam.exposure_range_ms, self.exp_slider, self.exp_spin, 1),
+                (cam.frame_rate_range, None, self.fps_spin, 1)):
+            if not lo_hi:
+                continue
+            try:
+                lo, hi = float(lo_hi[0]), float(lo_hi[1])
+                if not (np.isfinite(lo) and np.isfinite(hi) and hi > lo):
+                    continue
+                # Round INWARD to what the spin box can actually display.  A
+                # Blackfly's gain maximum is 47.99 dB and a one-decimal spin
+                # box rounds that to 48.0, which the camera then rejects; the
+                # exposure spin box shows whole milliseconds, so a 6 us
+                # minimum would display as 0 and offer a value no camera
+                # accepts.  Flooring the top and raising the bottom means
+                # every value the operator can dial in is one the camera takes.
+                step = 10.0 ** -spin.decimals()
+                lo = np.ceil(lo / step) * step
+                hi = np.floor(hi / step) * step
+                if hi <= lo:
+                    continue
+                for w in (slider, spin):
+                    if w is None:
+                        continue
+                    w.blockSignals(True)
+                    if w is slider:
+                        w.setRange(int(round(lo * scale)), int(round(hi * scale)))
+                    else:
+                        w.setRange(lo, hi)
+                    w.blockSignals(False)
+            except Exception as e:
+                logger.debug("Could not apply control range %r: %s", lo_hi, e)
+
+    def _populate_resolutions(self):
+        """Fill the resolution combo for the backends that offer a choice."""
+        self.res_combo.blockSignals(True)
+        self.res_combo.clear()
+        sizes = []
+        if self.cam is not None and self.cam.supports_resolution:
+            try:
+                sizes = self.cam.list_resolutions()
+            except Exception:
+                logger.exception("Could not list resolutions")
+        for w, h in sizes:
+            self.res_combo.addItem(f"{w} × {h}", (w, h))
+        if not sizes:
+            self.res_combo.addItem("—", None)
+        self.res_combo.blockSignals(False)
+        self.res_combo.setEnabled(bool(sizes))
+        has_dialog = self.cam is not None and self.cam.supports_native_dialog
+        self.btn_driver.setEnabled(has_dialog)
+        self.res_row.setVisible(bool(sizes) or has_dialog)
+
+    def _on_resolution_selected(self, _index):
+        size = self.res_combo.currentData()
+        if self.cam is None or not size:
+            return
+        # Frame dimensions change, so the same care as a binning change:
+        # stop, reconfigure, drop everything queued at the old size.
+        self._stop_capture()
+        if self.is_recording:
+            self._toggle_recording()
+        self._reset_averaging()
+        self._clear_reference()
+        try:
+            self.cam.set_resolution(*size)
         except Exception as e:
-            msg = str(e)
-            detail = msg
-            if "-1015" in msg or "wrong subnet" in msg.lower():
-                detail = (
-                    f"{msg}\n\n"
-                    "This is a GigE network configuration problem — the NIC connected\n"
-                    "to the camera is on a different IP subnet than the camera.\n\n"
-                    "Fix:\n"
-                    "  1. Open Control Panel → Network Adapters\n"
-                    "  2. Set the camera NIC to a static IP on the camera's subnet\n"
-                    "     (camera is likely 169.254.x.x → set NIC to 169.254.0.1 / 255.255.0.0)\n"
-                    "  3. Or run Spinnaker's SpinView → Action → Auto Force IP"
-                )
-            QMessageBox.critical(None, "Camera Init Failed", detail)
-            self.cam = None
-            self._set_camera_controls_enabled(False)
-            return
-
-        # Disable ALL auto controls — critical for stable RHEED intensity.
-        # Each can cause sharp step artifacts in the intensity trace.
-        self.cam.GainAuto.SetValue(PySpin.GainAuto_Off)
-        self.cam.ExposureAuto.SetValue(PySpin.ExposureAuto_Off)
-        self.cam.Gain.SetValue(self.gain_spin.value())
-        self.cam.ExposureTime.SetValue(self.exp_spin.value() * 1000)
-
-        # Black level auto fires in discrete steps as the sensor warms up —
-        # most common source of sharp periodic jumps in the intensity trace.
-        try:
-            self.cam.BlackLevelAuto.SetValue(PySpin.BlackLevelAuto_Off)
-        except Exception:
-            pass  # node may not exist on all models
-
-        # Black level clamping periodically re-clamps the black floor in
-        # discrete steps — the actual cause of the 5.6→5.8 intensity jumps.
-        try:
-            self.cam.BlackLevelClampingEnable.SetValue(False)
-        except Exception:
-            pass
-
-        # Hardware gamma compresses the response curve non-linearly; disable
-        # so pixel values are linear (software gamma is applied for display only).
-        try:
-            self.cam.GammaEnable.SetValue(False)
-        except Exception:
-            pass
-
-        # White balance auto (colour cameras only — safe no-op on mono).
-        try:
-            self.cam.BalanceWhiteAuto.SetValue(PySpin.BalanceWhiteAuto_Off)
-        except Exception:
-            pass
-
-        # Lock frame rate so FFT frequencies are accurate
-        try:
-            self.cam.AcquisitionFrameRateEnable.SetValue(True)
-            self.cam.AcquisitionFrameRate.SetValue(self.fps_spin.value())
-        except Exception:
-            pass
-
-        # Disable binning buttons the camera doesn't support
-        try:
-            max_bin = int(self.cam.BinningHorizontal.GetMax())
-        except Exception:
-            max_bin = 1
-        for btn in self._bin_group.buttons():
-            val = self._bin_group.id(btn)
-            btn.setEnabled(val <= max_bin)
-
+            QMessageBox.warning(self, "Resolution", f"Could not set size: {e}")
+        self._drain_frame_queue()
         self._start_acquisition()
+        self.statusBar().showMessage(f"Resolution set to {size[0]} × {size[1]}.", 5000)
+
+    def _open_driver_dialog(self):
+        if self.cam is None:
+            QMessageBox.information(self, "Driver settings",
+                                    "Connect a camera first.")
+            return
+        if not self.cam.supports_native_dialog:
+            QMessageBox.information(
+                self, "Driver settings",
+                f"{self.cam.backend_name} has no driver dialog.\n\n"
+                "Only USB cameras on Windows expose one; set gain and exposure "
+                "with the controls on this tab instead.")
+            return
+        try:
+            self.cam.open_native_dialog()
+        except Exception as e:
+            QMessageBox.information(self, "Driver settings", str(e))
+
+    def _update_source_status(self, message=None):
+        """The line under the source chooser: what is connected, and caveats."""
+        if message:
+            self.cam_status_label.setText(message)
+            self.cam_status_label.setStyleSheet("color:#e67e22;")
+            return
+        if self.cam is None:
+            n = len(self._cameras)
+            self.cam_status_label.setText(
+                f"Not connected — {n} source{'' if n == 1 else 's'} found."
+                if n else "No camera found. Help ▸ Camera backends shows why.")
+            self.cam_status_label.setStyleSheet("color:#bdc3c7;")
+            return
+        text = f"Connected · {self.cam.backend_name}"
+        if self.cam.note:
+            text += f"\n{self.cam.note}"
+        self.cam_status_label.setText(text)
+        # The label is two lines tall; the tooltip is where the long form of
+        # the caveat fits, whatever the operator has done to the splitter.
+        self.cam_status_label.setToolTip(
+            f"{self.cam_info.label}\n{self.cam.backend_name}"
+            + (f"\n\n{self.cam.note_detail or self.cam.note}"
+               if (self.cam.note_detail or self.cam.note) else ""))
+        self.cam_status_label.setStyleSheet("color:#2ecc71;")
+
+    def _add_network_camera(self):
+        """Add an RTSP / HTTP stream URL by hand — nothing can discover these."""
+        url, ok = QInputDialog.getText(
+            self, "Add network camera",
+            "Stream URL:\n\n"
+            "  rtsp://user:password@192.168.1.64:554/Streaming/Channels/101\n"
+            "  http://192.168.1.90/mjpg/video.mjpg\n")
+        if not ok or not url.strip():
+            return
+        vcam.register_network_camera(url.strip())
+        self._refresh_cameras()
+        idx = self.cam_combo.findData(f"network:{url.strip()}")
+        if idx >= 0:
+            self.cam_combo.setCurrentIndex(idx)
+            self._on_camera_selected(idx)
+
+    def _remove_network_camera(self):
+        urls = vcam.network_cameras()
+        if not urls:
+            QMessageBox.information(self, "Network cameras",
+                                    "No network camera has been added.")
+            return
+        url, ok = QInputDialog.getItem(self, "Remove network camera",
+                                       "Stream to forget:", urls, 0, False)
+        if not ok or not url:
+            return
+        if self.cam_info is not None and self.cam_info.key == f"network:{url}":
+            self._disconnect_camera()
+        vcam.forget_network_camera(url)
+        self._refresh_cameras()
+
+    def _set_screen_region(self):
+        """Choose which rectangle of the desktop the screen source captures.
+
+        The point of screen capture is a vendor program's live-image pane, so
+        the useful region is a window, not a monitor; capturing the whole 4K
+        display instead would spend most of the frame budget on the toolbars.
+        """
+        info = self._selected_camera()
+        if info is None or info.backend_id != 'screen':
+            QMessageBox.information(
+                self, "Screen capture region",
+                "Select a Screen source in the Camera tab first.")
+            return
+        monitor, region = vcam.parse_screen_id(info.device_id)
+        dlg = ScreenRegionDialog(self, monitor, region)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        rect = dlg.region()
+        key = vcam.screen_source_key(monitor, rect)
+        new_info = vcam.CameraInfo(
+            vcam.ScreenCaptureBackend, key,
+            f"Screen {monitor}  ({rect[2]}×{rect[3]} at {rect[0]},{rect[1]})",
+            "desktop")
+        # Replace the plain-monitor entry so the region survives a refresh.
+        self._cameras = [c for c in self._cameras
+                         if not (c.backend_id == 'screen'
+                                 and vcam.parse_screen_id(c.device_id)[0] == monitor)]
+        self._cameras.append(new_info)
+        self.cam_combo.blockSignals(True)
+        self.cam_combo.clear()
+        for c in self._cameras:
+            self.cam_combo.addItem(c.label, c.key)
+        self.cam_combo.setCurrentIndex(max(0, self.cam_combo.findData(key)))
+        self.cam_combo.blockSignals(False)
+        self._connect_camera(new_info)
+
+    def _show_backends(self):
+        """What VRHEED can talk to on this machine, and how to add the rest."""
+        rows = []
+        for name, ok, reason in vcam.backend_status():
+            mark = "✔" if ok else "✖"
+            colour = "#2ecc71" if ok else "#e74c3c"
+            extra = f" <span style='color:#bdc3c7;'>— {reason}</span>" if reason else ""
+            rows.append(f"<tr><td style='color:{colour};'>{mark}</td>"
+                        f"<td><b>{name}</b>{extra}</td></tr>")
+        QMessageBox.information(self, "Camera backends", (
+            "<b>Camera support on this machine</b><br><br>"
+            "<table cellspacing='4'>" + "".join(rows) + "</table><br>"
+            "Every driver is optional and loaded only when used. Install the "
+            "one your camera needs, then press ⟳ in the Camera tab.<br><br>"
+            "<small>The GenICam / GenTL backend drives <i>any</i> GigE Vision "
+            "or USB3 Vision camera once one vendor SDK is installed, including "
+            "vendors with no dedicated backend here.</small>"))
 
     def _set_camera_controls_enabled(self, on):
-        for w in (self.gain_slider, self.gain_spin, self.exp_slider,
-                  self.exp_spin, self.fps_spin):
-            w.setEnabled(on)
+        """Enable exactly the controls the connected camera can honour."""
+        cam = self.cam
+        def cap(flag):
+            return bool(on and cam is not None and getattr(cam, flag))
+        for w in (self.gain_slider, self.gain_spin):
+            w.setEnabled(cap('supports_gain'))
+        for w in (self.exp_slider, self.exp_spin):
+            w.setEnabled(cap('supports_exposure'))
+        self.fps_spin.setEnabled(cap('supports_frame_rate'))
+        max_bin = cam.max_binning() if (on and cam is not None) else 1
         for btn in self._bin_group.buttons():
-            btn.setEnabled(on)
+            btn.setEnabled(bool(on) and self._bin_group.id(btn) <= max_bin)
+        if not on:
+            self.res_combo.setEnabled(False)
+            self.btn_driver.setEnabled(False)
+            self.res_row.setVisible(False)
+
+    # -----------------------------------------------------------------------
+    # Acquisition thread
+    # -----------------------------------------------------------------------
 
     def _start_acquisition(self):
         if self.cam is None:
             return
+        # Never leave a previous grab thread running: two threads on one camera
+        # handle fight over the same buffer pool, and the symptom is dropped
+        # frames halfway through a growth rather than an error anyone sees.
+        if self._cap_thread is not None and self._cap_thread.is_alive():
+            self._stop_capture()
         self._stop_event.clear()
         try:
-            self.cam.BeginAcquisition()
+            self.cam.start()
         except Exception as e:
             QMessageBox.warning(self, "Acquisition", f"Could not start: {e}")
             return
@@ -1422,44 +1907,46 @@ class VRHEED_App(QMainWindow):
     def _stop_capture(self):
         """Stop the grab thread and wait for it, then end acquisition.
 
-        Without the join, restarting acquisition (binning change, shutdown)
-        could leave the old thread inside GetNextImage while a new one starts,
-        so two threads fight over the same camera handle.
+        Without the join, restarting acquisition (binning change, camera swap,
+        shutdown) could leave the old thread inside the backend's blocking read
+        while a new one starts, so two threads fight over the same handle.
         """
         self._stop_event.set()
         t, self._cap_thread = self._cap_thread, None
         if t is not None and t.is_alive():
             t.join(timeout=1.5)
         if self.cam is not None:
-            try: self.cam.EndAcquisition()
+            try: self.cam.stop()
             except Exception: pass
 
     def _capture_loop(self):
-        """Background thread: grab frames → queue."""
+        """Background thread: grab frames → queue.
+
+        Everything vendor-specific -- buffer release, incomplete frames, mono
+        conversion, software binning -- happens inside the backend, so this
+        loop is the same whatever the camera is.
+        """
+        cam = self.cam
         while not self._stop_event.is_set():
-            res = None
             try:
-                res = self.cam.GetNextImage(500)
-                if res is not None and not res.IsIncomplete():
-                    frame = res.GetNDArray().copy()
-                    t = time.monotonic()
-                    # Drop the oldest, not the newest: a stalled UI must see
-                    # the most recent pattern, not one from a second ago.
-                    if self.frame_queue.full():
-                        try: self.frame_queue.get_nowait()
-                        except queue.Empty: pass
-                    self.frame_queue.put((frame, t))
+                frame = cam.get_frame(500)
+                if frame is None:
+                    # A backend whose read returns immediately (a USB camera
+                    # that has just been unplugged) would otherwise spin this
+                    # loop at 100% CPU.
+                    time.sleep(0.005)
+                    continue
+                t = time.monotonic()
+                # Drop the oldest, not the newest: a stalled UI must see
+                # the most recent pattern, not one from a second ago.
+                if self.frame_queue.full():
+                    try: self.frame_queue.get_nowait()
+                    except queue.Empty: pass
+                self.frame_queue.put((frame, t))
             except Exception:
                 # A persistent camera error would otherwise spin this loop at
                 # 100% CPU; back off enough to stay responsive but stay cheap.
                 time.sleep(0.02)
-            finally:
-                # Spinnaker hands out a fixed pool of buffers; an image that is
-                # never released (e.g. GetNDArray raised) is a buffer lost for
-                # the rest of the session, and after a handful the stream stalls.
-                if res is not None:
-                    try: res.Release()
-                    except Exception: pass
 
     def _drain_frame_queue(self):
         """Discard every queued frame.
@@ -3010,15 +3497,18 @@ class VRHEED_App(QMainWindow):
 
     def _collect_metadata(self):
         """Return a list of (key, value) strings describing current settings."""
-        def cam_str(attr):
-            try:    return str(getattr(self.cam, attr).GetValue())
-            except Exception: return "n/a"
-
-        # Current binning — read from camera if possible, else the checked button
-        try:
-            binning = int(self.cam.BinningHorizontal.GetValue())
-        except Exception:
-            binning = self._bin_group.checkedId() or 1
+        # Whatever the backend knows about the camera: vendor, model, serial,
+        # pixel format, binning.  Backends fill in what their SDK exposes and
+        # leave out the rest, so the header never carries invented values.
+        cam_meta = {}
+        if self.cam is not None:
+            try:
+                cam_meta = self.cam.metadata()
+            except Exception:
+                logger.exception("Could not read camera metadata")
+        cam_meta.setdefault("Binning",
+                            f"{self._bin_group.checkedId() or 1}×"
+                            f"{self._bin_group.checkedId() or 1}")
 
         roi_lines = []
         for i, roi in enumerate(self.roi_boxes):
@@ -3033,12 +3523,11 @@ class VRHEED_App(QMainWindow):
             ("VRHEED version",     __version__),
             ("Log file",           LOG_PATH),
             ("Source",             self.source_mode),
-            ("Camera model",       cam_str("DeviceModelName")),
-            ("Camera serial",      cam_str("DeviceSerialNumber")),
-            ("Camera vendor",      cam_str("DeviceVendorName")),
+        ] + [(k, v) for k, v in cam_meta.items()
+             if k not in ("Frame width (px)", "Frame height (px)", "Binning")] + [
             ("Frame width (px)",   str(self._frame_w)),
             ("Frame height (px)",  str(self._frame_h)),
-            ("Binning",            f"{binning}×{binning}"),
+            ("Binning",            cam_meta["Binning"]),
             ("Rotation (deg)",     f"{self._rotation_deg} + {self.rot_fine_spin.value():+.1f}"),
             ("Gain (dB)",          f"{self.gain_spin.value():.2f}"),
             ("Exposure (ms)",      f"{self.exp_spin.value():.2f}"),
@@ -3139,7 +3628,13 @@ class VRHEED_App(QMainWindow):
             "  Del .......... delete active ROI     Ctrl+Shift+C  clear ROIs\n"
             "  Ctrl+O ....... open video            Ctrl+I ..... open image\n"
             "  Ctrl+S ....... snap image            Ctrl+R ..... record\n"
-            "  Ctrl+E ....... export CSV            Ctrl+[ / ] . rotate\n\n"
+            "  Ctrl+E ....... export CSV            Ctrl+[ / ] . rotate\n"
+            "  F5 ........... rescan for cameras\n\n"
+            "Camera\n"
+            "  The Source box at the top of the Camera tab lists every camera "
+            "found.\n"
+            "  Help ▸ Camera backends shows which drivers are installed and "
+            "what to\n  install for the rest.\n\n"
             "Zoom, gamma, colormap and contrast are display-only. Every ROI "
             "value is measured on the raw frame."))
 
@@ -3160,9 +3655,12 @@ class VRHEED_App(QMainWindow):
             "In-plane lattice constant and strain from streak separation.<br>"
             "Kinematic Ewald-sphere pattern overlay.<br>"
             "Recorded video and still images can be re-analysed offline.<br><br>"
+            "Works with FLIR, Basler, Allied Vision, any GenICam camera, "
+            "scientific cameras and frame grabbers, USB cameras, network "
+            "streams and screen capture — see Help ▸ Camera backends.<br><br>"
             f"<small>Python {platform.python_version()} · numpy {np.__version__} "
-            f"· OpenCV {cv2.__version__} · PySpin "
-            f"{'available' if HAVE_PYSPIN else 'not installed'}<br>"
+            f"· OpenCV {cv2.__version__}<br>"
+            f"Camera drivers installed: {_installed_backends()}<br>"
             f"Log: {LOG_PATH}</small>"))
 
     # -----------------------------------------------------------------------
@@ -3293,6 +3791,23 @@ class VRHEED_App(QMainWindow):
                 self._last_dir = d
         except Exception as e:
             logger.warning("Ignoring stored last_dir: %s", e)
+        # Which camera to reconnect to, and the stream URLs that nothing can
+        # discover.  Stored as keys and URLs rather than list positions: a
+        # camera's position changes the moment a different one is unplugged.
+        try:
+            key = s.value('camera/last_key', "")
+            if isinstance(key, str):
+                self._last_cam_key = key
+        except Exception as e:
+            logger.warning("Ignoring stored camera key: %s", e)
+        try:
+            urls = s.value('camera/network_urls', [])
+            if isinstance(urls, str):
+                urls = [urls] if urls else []
+            for url in (urls or []):
+                vcam.register_network_camera(str(url))
+        except Exception as e:
+            logger.warning("Ignoring stored network cameras: %s", e)
         if values:
             logger.info("Restored %d settings", len(values))
 
@@ -3306,6 +3821,9 @@ class VRHEED_App(QMainWindow):
         s.setValue('window/main_splitter', self.main_splitter.saveState())
         s.setValue('window/left_splitter', self.left_splitter.saveState())
         s.setValue('files/last_dir', self._last_dir)
+        s.setValue('camera/last_key',
+                   self.cam_info.key if self.cam_info else self._last_cam_key)
+        s.setValue('camera/network_urls', vcam.network_cameras())
         s.setValue('app/version', __version__)
         s.sync()
 
@@ -3342,15 +3860,13 @@ class VRHEED_App(QMainWindow):
             try: self.video_cap.release()
             except Exception: pass
             self.video_cap = None
-        self._stop_capture()
+        self._disconnect_camera()
+        # Process-wide driver handles (the Spinnaker System, the GenTL
+        # producers) outlive individual cameras and have to be released last.
         try:
-            if self.cam:
-                self.cam.DeInit()
-            self.cam = None
-            if self.system is not None:
-                self.system.ReleaseInstance()
+            vcam.shutdown()
         except Exception:
-            pass
+            logger.exception("Camera subsystem shutdown failed")
         logger.info("VRHEED closed")
         event.accept()
 
@@ -3370,6 +3886,10 @@ def _check() -> int:
     import tempfile
 
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    # Discovery opens every local video device in turn.  On a CI runner that
+    # is seconds of nothing, and this check is about whether the binary can
+    # import and draw, not about hardware.
+    os.environ["VRHEED_NO_CAMERA_SCAN"] = "1"
     tmp = tempfile.mkdtemp(prefix="vrheed_check_")
     os.environ.setdefault("VRHEED_SETTINGS_FILE", os.path.join(tmp, "settings.ini"))
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -3380,7 +3900,11 @@ def _check() -> int:
     win.show()
     app.processEvents()
     win.close()
-    print(f"PASS: VRHEED {__version__} starts ({platform.system()})", flush=True)
+    # Which camera drivers made it into this build -- the one thing about a
+    # frozen binary you cannot tell by looking at it.
+    drivers = [name for name, ok, _ in vcam.backend_status() if ok]
+    print(f"PASS: VRHEED {__version__} starts ({platform.system()}); "
+          f"camera backends: {', '.join(drivers) or 'none'}", flush=True)
     return 0
 
 
