@@ -221,11 +221,20 @@ def test_driver_absent_vs_broken():
 def test_spinnaker_report_without_pyspin():
     """The --flir diagnosis must work even with no PySpin at all."""
     lines = vc.spinnaker_report()
+    joined = "\n".join(lines)
     check("the FLIR report always returns something",
           isinstance(lines, list) and lines, lines)
-    check("it names the import failure first",
-          "PySpin import FAILED" in lines[0] or "PySpin imported OK" in lines[0],
-          lines[0])
+    # Checked by content, not by position: the report leads with whether the
+    # Spinnaker SDK is on disk, because the SDK and the binding are separate
+    # installs and "is the SDK even here" comes first.  An earlier version of
+    # this test asserted line 0, and adding that section broke it.
+    check("it reports the SDK-on-disk search",
+          "Spinnaker SDK" in joined, joined[:120])
+    check("it reports the PySpin import outcome",
+          "PySpin import FAILED" in joined or "PySpin imported OK" in joined,
+          joined[:120])
+    check("every line is a string, so printing cannot fail",
+          all(isinstance(line, str) for line in lines))
 
 
 def test_software_binning():
