@@ -365,15 +365,26 @@ def gaussian_fit(x, y):
     w = np.clip(y - off0, 0, None)
     tot = float(w.sum())
     sig0 = (float(np.sqrt(np.sum(w * (x - cen0) ** 2) / tot)) if tot > 0
-            else float(x.ptp()) / 6.0)
+            else float(np.ptp(x)) / 6.0)
     sig0 = max(sig0, float(abs(x[1] - x[0])) if x.size > 1 else 1.0)
 
     try:
         p, _ = curve_fit(
             _gauss, x, y, p0=[amp0, cen0, sig0, off0], maxfev=4000,
             bounds=([0.0, float(x.min()), 1e-6, -np.inf],
-                    [np.inf, float(x.max()), float(x.ptp()) or np.inf, np.inf]))
-    except Exception:
+                    [np.inf, float(x.max()), float(np.ptp(x)) or np.inf, np.inf]))
+    except (RuntimeError, ValueError, TypeError):
+        # RuntimeError: maxfev reached without converging.  ValueError/TypeError:
+        # degenerate input or bounds that cannot bracket the seed.  Those are
+        # the ways a real profile legitimately fails to fit, and None is the
+        # right answer for them.
+        #
+        # Anything else is a bug and must NOT be turned into "no fit": this
+        # used to be a bare `except Exception`, and when numpy 2.0 removed the
+        # ndarray.ptp() method the AttributeError from the bounds above was
+        # swallowed here.  Every Gaussian fit in the app -- FWHM, coherence
+        # length, streak position -- silently stopped working, with no error
+        # anywhere, on any machine with numpy 2 installed.
         return None
 
     amp, cen, sigma, off = (float(v) for v in p)
@@ -437,7 +448,7 @@ def profile_metrics(values, x=None, prefer_fit=True):
 
     if prefer_fit:
         fit = gaussian_fit(x, arr)
-        if fit is not None and fit['r2'] > 0.60 and fit['fwhm'] < float(x.ptp()):
+        if fit is not None and fit['r2'] > 0.60 and fit['fwhm'] < float(np.ptp(x)):
             return {'center': fit['center'], 'fwhm': fit['fwhm'],
                     'amplitude': fit['amp'], 'background': fit['offset'],
                     'r2': fit['r2'], 'method': 'gaussian',
