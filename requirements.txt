@@ -2,14 +2,22 @@
 numpy
 scipy
 
-# numpy 2 note.  VRHEED's own code runs on numpy 1 and numpy 2 (CI tests both).
-# PySpin is the constraint: FLIR's wheels are compiled against the numpy 1.x
-# C ABI, so a Python with numpy >= 2 can fail to import them.  If you use the
-# FLIR backend, keep numpy < 2 in that environment:
+# numpy 2.  VRHEED's own code runs on numpy 1 and numpy 2; CI tests both.
+#
+# A vendor camera binding may not.  A C extension compiled against the numpy
+# 1.x headers cannot be imported by numpy 2 -- the array C ABI changed and
+# such modules have to be rebuilt -- so whether any particular PySpin,
+# pypylon or vmbpy wheel works under numpy 2 depends on how that wheel was
+# built, which is not something to guess at.
+#
+# You do not have to: "python vrheed_cameras.py" says.  If a binding fails to
+# import for this reason the diagnostic recognises the loader's error and
+# tells you, along with the command to fix it in that environment:
 #
 #     pip install "numpy<2"
 #
-# Nothing else here needs the older numpy.
+# Known case: PySpin 4.2.0.88 on Python 3.10 is used with numpy 1.26 and
+# works.  It has not been tried under numpy 2.
 opencv-python
 PyQt5
 pyqtgraph

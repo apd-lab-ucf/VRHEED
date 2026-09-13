@@ -12,6 +12,7 @@ Exit status is non-zero on any failure, so it can gate a build.
 import os
 import sys
 import tempfile
+import platform
 import threading
 import time
 import types
@@ -216,6 +217,42 @@ def test_driver_absent_vs_broken():
     check("...and says what usually causes it",
           "Spinnaker SDK runtime" in reason or "wheel" in reason, reason)
     del broken
+
+
+def test_numpy_abi_detection():
+    """The numpy 1-vs-2 ABI break is detected, not assumed.
+
+    Which vendor wheels were built against numpy 1 is not knowable in advance,
+    so the code reads the loader's own complaint instead of the docs asserting
+    it.  That only helps if it fires on the real message and stays quiet
+    otherwise.
+    """
+    import numpy as _np
+    on_numpy2 = int(_np.__version__.split(".")[0]) >= 2
+
+    real = "ImportError: numpy.core.multiarray failed to import"
+    note = vc._numpy_abi_problem(real)
+    if on_numpy2:
+        check("the ABI break is recognised under numpy 2",
+              "numpy 1-vs-2" in note and "numpy<2" in note, note[:80])
+        check("...and names the interpreter to fix",
+              sys.executable in note, note[:80])
+    else:
+        check("no numpy-2 advice is given on numpy 1", note == "", note)
+
+    check("an unrelated DLL failure is not blamed on numpy",
+          vc._numpy_abi_problem("DLL load failed while importing _PySpin") == "")
+    check("a plain missing module is not blamed on numpy",
+          vc._numpy_abi_problem("No module named 'PySpin'") == "")
+
+
+def test_sdk_version_lookup():
+    """Reading the installed SDK version must be safe off Windows."""
+    version = vc._spinnaker_sdk_installed_version()
+    check("SDK version lookup returns a string and never raises",
+          isinstance(version, str), repr(version))
+    if platform.system() != "Windows":
+        check("...and is empty off Windows", version == "", repr(version))
 
 
 def test_spinnaker_report_without_pyspin():
@@ -813,6 +850,8 @@ def main_():
     test_registry()
     test_console_output_is_ascii()
     test_driver_absent_vs_broken()
+    test_numpy_abi_detection()
+    test_sdk_version_lookup()
     test_spinnaker_report_without_pyspin()
     test_software_binning()
     test_mono_conversion()

@@ -89,6 +89,42 @@ def _probe_import(module_name):
         return None, f"{type(e).__name__}: {e}"
 
 
+# A C extension built against the numpy 1.x headers cannot be imported by
+# numpy 2: the array C ABI changed and such modules must be recompiled.  The
+# loader says so in several different phrasings depending on numpy version,
+# none of which mention numpy 1 or 2 outright.
+_NUMPY_ABI_SIGNS = (
+    "numpy.core.multiarray failed to import",
+    "compiled against API version",
+    "_ARRAY_API not found",
+    "numpy.dtype size changed",
+    "binary incompatibility",
+)
+
+
+def _numpy_abi_problem(error_text):
+    """A note when an import failure looks like the numpy 1-vs-2 ABI break.
+
+    Written as a check rather than a claim in the docs: whether a given
+    vendor wheel was built against numpy 1 is not something to assert from
+    memory, but it IS something the loader tells us at the moment it fails.
+    """
+    if not any(sign.lower() in error_text.lower() for sign in _NUMPY_ABI_SIGNS):
+        return ""
+    try:
+        version = np.__version__
+        major = int(version.split(".")[0])
+    except Exception:
+        version, major = "unknown", 0
+    if major < 2:
+        return ""
+    return (f"\nThis looks like the numpy 1-vs-2 C ABI break: this Python has "
+            f"numpy {version}, and an extension compiled against numpy 1.x "
+            f"cannot be imported by numpy 2.\n"
+            f"Install numpy < 2 in this environment:\n"
+            f'    "{sys.executable}" -m pip install "numpy<2"')
+
+
 def _pythons_with_pyspin(limit=8):
     """Other Python interpreters on this machine that can import PySpin.
 
@@ -145,6 +181,49 @@ def _pythons_with_pyspin(limit=8):
     return found
 
 
+def _spinnaker_sdk_installed_version():
+    """Version of the Spinnaker SDK package installed system-wide, or "".
+
+    Read from the Windows uninstall registry, which is the same place Add or
+    Remove Programs reads.  Deliberately independent of PySpin: the point is
+    to compare what the binding reports against what is installed.
+    """
+    if platform.system() != "Windows":
+        return ""
+    try:
+        import winreg
+    except Exception:
+        return ""
+    roots = (r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+             r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")
+    for path in roots:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path)
+        except Exception:
+            continue
+        try:
+            for index in range(winreg.QueryInfoKey(key)[0]):
+                try:
+                    sub = winreg.OpenKey(key, winreg.EnumKey(key, index))
+                    name = winreg.QueryValueEx(sub, "DisplayName")[0]
+                except Exception:
+                    continue
+                # "Teledyne Spinnaker SDK 4.3.0.189 (x64)" is the umbrella
+                # entry; the component entries (Binaries, Drivers, GenTL)
+                # carry the same version.
+                if "Spinnaker SDK" in name:
+                    try:
+                        return str(winreg.QueryValueEx(sub, "DisplayVersion")[0])
+                    except Exception:
+                        continue
+        finally:
+            try:
+                key.Close()
+            except Exception:
+                pass
+    return ""
+
+
 def _spinnaker_sdk_on_disk():
     """What FLIR Spinnaker SDK is installed, independent of PySpin.
 
@@ -165,6 +244,9 @@ def _spinnaker_sdk_on_disk():
     else:
         roots += ["/usr/lib/spinnaker", "/opt/spinnaker"]
 
+    installed = _spinnaker_sdk_installed_version()
+    if installed:
+        lines.append(f"Spinnaker SDK installed: {installed}")
     for root in roots:
         if os.path.isdir(root):
             lines.append(f"Spinnaker SDK found: {root}")
@@ -627,8 +709,11 @@ class SpinnakerBackend(CameraBackend):
     def unavailable_reason(cls):
         error = cls._import_error
         if error and not _missing(error, "PySpin"):
-            # Overwhelmingly the wheel/SDK mismatch, and the loader error is
-            # the only thing that says so.  Spell out the check rather than
+            abi = _numpy_abi_problem(error)
+            if abi:
+                return f"PySpin is installed but will not load: {error}{abi}"
+            # Otherwise: usually the wheel/SDK mismatch, and the loader error
+            # is the only thing that says so.  Spell out the check rather than
             # leaving a DLL message on screen with no next step.
             return (f"PySpin is installed but will not load: {error}\n"
                     "Usually the Spinnaker SDK runtime is missing or is a "
@@ -2164,12 +2249,29 @@ def spinnaker_report():
             lines.append(f"  {label}: {getattr(module, attr)}")
         except Exception:
             pass
+    library = ""
     try:
         version = module.System.GetInstance().GetLibraryVersion()
-        lines.append(f"  Spinnaker library: {version.major}.{version.minor}."
-                     f"{version.type}.{version.build}")
+        library = (f"{version.major}.{version.minor}."
+                   f"{version.type}.{version.build}")
+        lines.append(f"  Spinnaker library (as PySpin reports it): {library}")
     except Exception as e:
         lines.append(f"  (could not read library version: {e})")
+    installed = _spinnaker_sdk_installed_version()
+    if library and installed and not installed.startswith(library):
+        # Two different sources: the binding, and the installed SDK package.
+        # They routinely differ and it is not by itself a fault -- say so
+        # rather than sending someone to reinstall a working setup.  It is
+        # worth recording because it is a reasonable first suspect IF the
+        # camera starts behaving oddly.
+        lines.append(f"  Note: PySpin reports {library}, the installed SDK "
+                     f"package is {installed}.")
+        lines.append("        A difference here is common and is not a fault "
+                     "on its own.")
+        lines.append("        Treat it as a suspect only if a node refuses to "
+                     "set or grabs fail intermittently;")
+        lines.append("        the fix would be the PySpin wheel matching the "
+                     "installed SDK.")
     try:
         system = _spinnaker_system()
     except Exception as e:
