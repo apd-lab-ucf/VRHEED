@@ -1883,17 +1883,34 @@ class VRHEED_App(QMainWindow):
     def _show_backends(self):
         """What VRHEED can talk to on this machine, and how to add the rest."""
         rows = []
-        for name, ok, reason in vcam.backend_status():
+        for backend in vcam.BACKENDS:
+            try:
+                ok = backend.available()
+                reason = "" if ok else backend.unavailable_reason()
+            except Exception:
+                ok, reason = False, "could not be checked"
             mark = "✔" if ok else "✖"
             colour = "#2ecc71" if ok else "#e74c3c"
             extra = f" <span style='color:#bdc3c7;'>— {reason}</span>" if reason else ""
+            # How much the backend has actually been used matters more than
+            # whether its driver happens to be installed, and it is not
+            # something the operator can find out any other way.
+            grade = getattr(backend, 'verification', 'unverified')
+            note = vcam.VERIFICATION_LABEL.get(grade, grade)
+            note_colour = "#e67e22" if grade == "unverified" else "#95a5a6"
             rows.append(f"<tr><td style='color:{colour};'>{mark}</td>"
-                        f"<td><b>{name}</b>{extra}</td></tr>")
+                        f"<td><b>{backend.backend_name}</b>{extra}<br>"
+                        f"<span style='color:{note_colour};font-size:11px;'>"
+                        f"{note}</span></td></tr>")
         QMessageBox.information(self, "Camera backends", (
             "<b>Camera support on this machine</b><br><br>"
             "<table cellspacing='4'>" + "".join(rows) + "</table><br>"
             "Every driver is optional and loaded only when used. Install the "
             "one your camera needs, then press ⟳ in the Camera tab.<br><br>"
+            "<b>Only the FLIR backend has been used with a real camera.</b> "
+            "The ones marked UNVERIFIED are written against each vendor's "
+            "published API and have never met the hardware — treat them as a "
+            "starting point, and please report what you find.<br><br>"
             "<small>The GenICam / GenTL backend drives <i>any</i> GigE Vision "
             "or USB3 Vision camera once one vendor SDK is installed, including "
             "vendors with no dedicated backend here.</small>"))
@@ -3699,9 +3716,11 @@ class VRHEED_App(QMainWindow):
             "In-plane lattice constant and strain from streak separation.<br>"
             "Kinematic Ewald-sphere pattern overlay.<br>"
             "Recorded video and still images can be re-analysed offline.<br><br>"
-            "Works with FLIR, Basler, Allied Vision, any GenICam camera, "
-            "scientific cameras and frame grabbers, USB cameras, network "
-            "streams and screen capture — see Help ▸ Camera backends.<br><br>"
+            "Camera support: FLIR/Spinnaker (verified on hardware), USB "
+            "cameras, network streams, screen capture and a simulated source, "
+            "plus Basler, Allied Vision, GenICam and scientific-camera "
+            "backends that are written but unverified — see "
+            "Help ▸ Camera backends.<br><br>"
             f"<small>Python {platform.python_version()} · numpy {np.__version__} "
             f"· OpenCV {cv2.__version__}<br>"
             f"Camera drivers installed: {_installed_backends()}<br>"

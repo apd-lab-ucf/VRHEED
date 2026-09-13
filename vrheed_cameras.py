@@ -358,6 +358,14 @@ class CameraBackend:
     exposure_range_ms = None     # (min_ms, max_ms)
     frame_rate_range = None      # (min_fps, max_fps)
 
+    # How much this backend has actually been used, as opposed to written.
+    # "hardware" it has driven a real camera; "tested" the suite covers it end
+    # to end; "partial" the no-camera paths are covered and the rest is not;
+    # "unverified" it is written against the vendor's published API and has
+    # never met the hardware.  Kept here rather than only in the README so the
+    # app can say so at the point someone picks a camera.
+    verification = "unverified"
+
     # Shown under the source chooser after connecting, for the caveats that
     # apply to one backend only (best-effort exposure on UVC, and so on).
     # ``note`` has to fit two short lines in the panel -- keep it under about
@@ -665,6 +673,7 @@ class SpinnakerBackend(CameraBackend):
     """
 
     backend_id = "spinnaker"
+    verification = "hardware"
     backend_name = "FLIR Spinnaker"
     supports_gain = True
     supports_exposure = True
@@ -1616,6 +1625,7 @@ class UsbCameraBackend(CameraBackend):
     """
 
     backend_id = "usb"
+    verification = "partial"
     backend_name = "USB / UVC camera"
     supports_gain = True
     supports_exposure = True
@@ -2048,6 +2058,7 @@ class SyntheticBackend(CameraBackend):
     """
 
     backend_id = "synthetic"
+    verification = "tested"
     backend_name = "Simulated RHEED pattern"
     supports_gain = True
     supports_exposure = True
@@ -2205,6 +2216,14 @@ def find_camera(key, cameras):
         if info.key == key:
             return info
     return None
+
+
+VERIFICATION_LABEL = {
+    "hardware":   "verified on hardware",
+    "tested":     "verified by the test suite",
+    "partial":    "partly verified - no-camera paths only",
+    "unverified": "UNVERIFIED - never run against the hardware",
+}
 
 
 def backend_status():

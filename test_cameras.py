@@ -274,6 +274,27 @@ def test_spinnaker_report_without_pyspin():
           all(isinstance(line, str) for line in lines))
 
 
+def test_verification_claims():
+    """The README and the app must agree about what has been proven.
+
+    An overclaim here is the most damaging kind of bug in a release nobody
+    can reproduce: someone points VRHEED at an Andor and trusts numbers from
+    a code path that has never run.
+    """
+    grades = {b.backend_id: b.verification for b in vc.BACKENDS}
+    check("every backend states how far it has been verified",
+          all(g in vc.VERIFICATION_LABEL for g in grades.values()), str(grades))
+    check("only FLIR claims real hardware",
+          [k for k, g in grades.items() if g == "hardware"] == ["spinnaker"],
+          str([k for k, g in grades.items() if g == "hardware"]))
+    check("the vendor backends nobody has run are marked unverified",
+          all(grades[k] == "unverified"
+              for k in ("pylon", "vimba", "genicam", "pylablib",
+                        "network", "screen")), str(grades))
+    check("the unverified label actually says so",
+          "UNVERIFIED" in vc.VERIFICATION_LABEL["unverified"])
+
+
 def test_software_binning():
     frame = np.arange(4 * 6, dtype=np.uint8).reshape(4, 6)
     out = vc.CameraBackend._software_bin(frame, 2)
@@ -849,6 +870,7 @@ def main_():
     _silence_dialogs()
     test_registry()
     test_console_output_is_ascii()
+    test_verification_claims()
     test_driver_absent_vs_broken()
     test_numpy_abi_detection()
     test_sdk_version_lookup()

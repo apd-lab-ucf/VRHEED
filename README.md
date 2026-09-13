@@ -28,18 +28,49 @@ connects.  *Camera ▸ Rescan* (F5) looks again after something is plugged in,
 and *Help ▸ Camera backends* shows which drivers are installed and what to
 install for the rest.
 
-| Camera | Backend | Install |
-|---|---|---|
-| FLIR / Point Grey — Blackfly, Grasshopper, Chameleon | Spinnaker | PySpin, from the FLIR Spinnaker SDK installer (not on PyPI) |
-| Basler — ace, ace 2, dart, boost | pylon | `pip install pypylon` |
-| Allied Vision — Manta, Alvium, Mako | Vimba X | `vmbpy`, from the Vimba X SDK |
-| Any other GigE Vision / USB3 Vision camera — IDS, Lucid, JAI, Baumer, Ximea, Matrix Vision, Photonfocus, Emergent | GenICam / GenTL | `pip install harvesters` plus any one vendor SDK for its `.cti` producer |
-| Andor iXon / Zyla, Hamamatsu ORCA, Princeton Instruments PIXIS, Photometrics, PCO, Thorlabs scientific | pylablib | `pip install pylablib` plus the vendor SDK |
-| NI IMAQ / IMAQdx frame grabbers — how a 1990s analogue RHEED camera gets digitised | pylablib | `pip install pylablib` plus NI-IMAQ |
-| USB webcams, USB microscope cameras, HDMI/composite capture dongles, analogue cameras on a USB frame grabber | USB / UVC | nothing — OpenCV is already a dependency |
-| IP cameras and re-streamed feeds (RTSP, HTTP-MJPEG) | Network | nothing; add the URL with *Camera ▸ Add network camera* |
-| A region of the desktop — the live-image pane of kSA 400, Staib or any vendor software that owns the camera exclusively | Screen capture | `pip install mss` |
-| Simulated RHEED pattern, for demos, teaching and tests | Synthetic | nothing |
+| Camera | Backend | Status | Install |
+|---|---|---|---|
+| FLIR / Point Grey — Blackfly, Grasshopper, Chameleon | Spinnaker | **Verified on hardware** | PySpin, from the FLIR Spinnaker SDK installer (not on PyPI) |
+| Simulated RHEED pattern, for demos, teaching and tests | Synthetic | **Verified** | nothing |
+| USB webcams, USB microscope cameras, HDMI/composite capture dongles, analogue cameras on a USB frame grabber | USB / UVC | Partly verified | nothing — OpenCV is already a dependency |
+| Basler — ace, ace 2, dart, boost | pylon | **Unverified** | `pip install pypylon` |
+| Allied Vision — Manta, Alvium, Mako | Vimba X | **Unverified** | `vmbpy`, from the Vimba X SDK |
+| Any other GigE Vision / USB3 Vision camera — IDS, Lucid, JAI, Baumer, Ximea, Matrix Vision, Photonfocus, Emergent | GenICam / GenTL | **Unverified** | `pip install harvesters` plus any one vendor SDK for its `.cti` producer |
+| Andor iXon / Zyla, Hamamatsu ORCA, Princeton Instruments PIXIS, Photometrics, PCO, Thorlabs scientific | pylablib | **Unverified** | `pip install pylablib` plus the vendor SDK |
+| NI IMAQ / IMAQdx frame grabbers — how a 1990s analogue RHEED camera gets digitised | pylablib | **Unverified** | `pip install pylablib` plus NI-IMAQ |
+| IP cameras and re-streamed feeds (RTSP, HTTP-MJPEG) | Network | **Unverified** | nothing; add the URL with *Camera ▸ Add network camera* |
+| A region of the desktop — the live-image pane of kSA 400, Staib or any vendor software that owns the camera exclusively | Screen capture | **Unverified** | `pip install mss` |
+
+### What the status column means
+
+Be careful with this. Only one backend has been used with a real camera.
+
+**Verified on hardware** — Spinnaker, on a FLIR Blackfly S BFS-U3-27S5M:
+enumerated, connected, live frames rendered, gain / exposure / binning
+exercised. Its call sequence is additionally pinned by a stubbed PySpin in
+`test_cameras.py`, which checks the autos go off in the right order, gain in
+dB, exposure in microseconds, incomplete frames dropped, every image released,
+binning resetting the sensor window, and a clean shutdown.
+
+**Verified** — Synthetic. Nothing to attach; the test suite measures its
+specular oscillation and gets the documented 0.25 Hz back.
+
+**Partly verified** — USB / UVC. The discovery and open path runs on Windows,
+Linux and macOS in CI, but always on machines with no camera attached, so the
+"there is no camera here" path is well tested and the "there is one" path is
+not. Expect it to work; expect gain and exposure to be approximate, because
+UVC drivers disagree about the units.
+
+**Unverified** — written against each vendor's published API and never run
+against the hardware, because none of it was available. Read them as a
+starting point, not a guarantee. They are guarded so a wrong assumption
+degrades to *backend unavailable* or a refused control rather than a crash,
+and `python vrheed_cameras.py` will tell you what it can see, but the first
+person to point one of these at a real camera should expect to fix something.
+
+If you get one working — or find what is wrong with it — please open an issue
+or a pull request saying which camera and which SDK version, and this table
+can be corrected.
 
 Nothing above is a hard dependency.  With none of them installed VRHEED still
 opens, still analyses recorded video and images, and still offers the USB,
