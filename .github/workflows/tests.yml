@@ -54,6 +54,12 @@ jobs:
       - name: App starts headless (same check the release build uses)
         run: python main.py --check
 
+      # The launcher picks an interpreter and re-execs into it.  A runner has
+      # no PySpin anywhere, so this exercises the fallback path: explain, then
+      # start anyway in file-analysis mode.
+      - name: Launcher starts the app
+        run: python launch.py --check
+
   # VRHEED itself runs on numpy 1 and numpy 2.  This job is what keeps it that
   # way: numpy 2.0 removed the ndarray.ptp() METHOD, and because the call sat
   # inside a broad `except Exception` the Gaussian profile fit silently

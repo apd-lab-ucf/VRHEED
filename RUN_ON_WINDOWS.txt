@@ -116,7 +116,17 @@ VRHEED 2.2.0 — running from source on Windows
 
 5.  Run it:
 
-        python main.py
+        py launch.py
+
+    or double-click run_vrheed.bat.  The launcher finds the Python that
+    has the camera driver and uses that one -- on a PC with several
+    Pythons installed, "python" is usually not it, and that is the most
+    common reason the camera "disappears".  It prints which interpreter
+    it chose.
+
+    To pick one yourself:
+
+        py -3.10 main.py
 
     The Source box at the top of the Camera tab should already say
     "Connected · FLIR Spinnaker".  If it does not, press the refresh
@@ -140,30 +150,36 @@ All three print "all checks passed" and exit 0 on success.
 
 Building the .exe (optional)
 ----------------------------
-You do NOT need the exe to use VRHEED.  "python main.py" from the venv
-is the same program.  Build only when you want to hand it to someone
-who will not install Python.
+You do NOT need the exe to use VRHEED.  "py launch.py" is the same
+program.  Build only when you want to hand it to someone who will not
+install Python.
 
-The venv MUST still be activated.  PyInstaller bundles whatever the
-Python running it can import, so a global pyinstaller.exe building a
-venv project produces an exe that dies on launch.
+    build.bat            asks before building without camera support
+    build.bat -y         no prompts, for scripts
 
-    .venv\Scripts\activate
-    pip install pyinstaller
-    build.bat
+PyInstaller bundles whatever the Python RUNNING IT can import, which is
+the whole difficulty: build with the wrong one of several installed
+Pythons and you get an exe with no FLIR camera support, silently -- the
+build succeeds, the exe runs, it just never sees a camera.
 
-build.bat calls "python -m PyInstaller" rather than bare "pyinstaller"
-so it always uses the active environment, and main.spec refuses to
-build at all if that environment cannot import cv2, numpy, scipy,
-PyQt5 and pyqtgraph.
+So build.bat picks the interpreter the same way the app does, by asking
+which one can import PySpin (via "py launch.py --print-python").  It
+then:
 
-The build bundles whichever camera drivers are installed at build
-time, so install PySpin (step 3) BEFORE building or the exe will have
-no FLIR support.  The build prints which drivers it bundled -- read
-that line.
+  * says which Python it is building with, and whether that Python has
+    the camera driver
+  * warns and asks before producing a camera-less exe
+  * refuses if PyInstaller is not installed in that Python, and gives
+    the command to install it there
+  * builds BEFORE touching your existing VRHEED.exe, so a failed build
+    cannot leave you with no working binary
+  * runs the new exe with --check and refuses to install it if it does
+    not start.  A missing dependency does not fail the build, only the
+    launch, so this is the check that matters
 
-Always launch the exe once before trusting it.  A missing dependency
-does not fail the build, only the launch.
+main.spec independently refuses to build if its Python cannot import
+cv2, numpy, scipy, PyQt5 and pyqtgraph, and prints which camera drivers
+it bundled.
 
 
 If something goes wrong

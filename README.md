@@ -123,6 +123,32 @@ the Source box when you connect:
 On macOS, the USB and screen-capture backends need camera and screen-recording
 permission in *System Settings ▸ Privacy & Security*.
 
+### Starting VRHEED on a machine with several Pythons
+
+PySpin is not on PyPI: it is a wheel built for one Python version, so on a PC
+with 3.8 / 3.9 / 3.10 / 3.11 installed only the interpreter matching the wheel
+can see the camera.  `python` on PATH is whichever install came first, which is
+usually not that one -- so VRHEED starts in file-analysis mode and the camera
+appears to have vanished.
+
+`launch.py` removes the trap.  It finds an interpreter that can import PySpin,
+checks it also has VRHEED's dependencies, and re-execs into it:
+
+```
+py launch.py            Windows
+python3 launch.py       macOS / Linux
+run_vrheed.bat          Windows, double-clickable
+```
+
+It prints which interpreter it chose.  If the driver is installed somewhere but
+that Python lacks VRHEED's dependencies it says so and gives the `pip` command
+for that exact interpreter, rather than starting without a camera and letting
+it look broken.  With no PySpin anywhere it explains why there will be no
+camera and starts in file-analysis mode.
+
+`python main.py` still works and is the right thing when you know which
+interpreter you want.
+
 ### Auto-connect
 
 VRHEED reconnects to the camera it used last session when it is still there.
