@@ -8,8 +8,8 @@ name: Build release binaries
 # PySpin (the FLIR camera driver) is NOT on PyPI, so these builds start in
 # file-analysis mode: recorded videos and traces, no live camera. For live
 # acquisition run from source in a python that has the Spinnaker SDK wheel.
-# The mac apps are ad-hoc signed (no Developer ID): first launch needs
-# right-click → Open.
+# The mac apps are ad-hoc signed (no Developer ID). A downloaded copy is
+# quarantined; clear it once with:  xattr -cr /path/to/VRHEED.app
 on:
   release:
     types: [published]
@@ -75,6 +75,11 @@ jobs:
         run: pyinstaller --noconfirm main_mac.spec
       - name: Smoke-test the app (headless, no camera)
         run: QT_QPA_PLATFORM=offscreen "dist/VRHEED.app/Contents/MacOS/VRHEED" --check
+      # Anything written inside the bundle after PyInstaller signs it breaks the
+      # seal, and macOS then calls the download "damaged" (2.2.0 shipped that
+      # way: the smoke test left vrheed.log in Contents/MacOS). Refuse to ship.
+      - name: Verify the code signature is intact
+        run: codesign --verify --deep --strict --verbose=2 "dist/VRHEED.app"
       - name: Zip the .app (ditto keeps the bundle intact)
         run: ditto -c -k --keepParent "dist/VRHEED.app" "VRHEED-mac-${{ matrix.arch }}.zip"
       - uses: actions/upload-artifact@v4

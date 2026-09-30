@@ -56,12 +56,28 @@ def _app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-LOG_PATH = os.environ.get('VRHEED_LOG_FILE') or os.path.join(_app_dir(), "vrheed.log")
+def _log_dir():
+    """Where vrheed.log goes.  Next to the app, except in a macOS .app bundle:
+    there "next to the executable" is Contents/MacOS, inside the signed
+    bundle, and any file written there breaks the code signature -- macOS
+    then calls the app "damaged" and refuses to open it.  Use the standard
+    per-user log folder instead (Console.app lists it)."""
+    if getattr(sys, 'frozen', False) and sys.platform == 'darwin':
+        d = os.path.expanduser("~/Library/Logs/VRHEED")
+        try:
+            os.makedirs(d, exist_ok=True)
+            return d
+        except OSError:
+            pass
+    return _app_dir()
+
+
+LOG_PATH = os.environ.get('VRHEED_LOG_FILE') or os.path.join(_log_dir(), "vrheed.log")
 logger = logging.getLogger("vrheed")
 
 
 def _setup_logging():
-    """Rotating file log (~1 MB x 3) next to the executable.
+    """Rotating file log (~1 MB x 3) in _log_dir().
 
     Idempotent, so the smoke test and a second construction of the window do
     not stack handlers and duplicate every line.
