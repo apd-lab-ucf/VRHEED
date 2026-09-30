@@ -1,4 +1,4 @@
-VRHEED 2.2.0 — running from source on Windows
+VRHEED 2.2.1 — running from source on Windows
 =============================================
 
 1.  Python version: LET THE CAMERA DECIDE.

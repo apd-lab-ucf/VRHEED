@@ -1,7 +1,7 @@
 # VRHEED — Precision Analyzer
 
 Live RHEED acquisition and analysis for whatever camera is on your chamber,
-plus offline re-analysis of recorded growths.  Version 2.2.0.
+plus offline re-analysis of recorded growths.  Version 2.2.1.
 
 ```
 main.py             Qt application — display, ROIs, plots, settings, log
