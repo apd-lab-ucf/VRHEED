@@ -17,7 +17,7 @@ test_cameras.py     Camera backends and the source chooser, no camera needed.
                     QT_QPA_PLATFORM=offscreen python test_cameras.py
 requirements.txt    Runtime dependencies; every camera driver is optional
 main.spec           PyInstaller build.  build.bat -> VRHEED.exe
-vrheed.log          Written next to the exe at run time (see Changes in 2.1)
+vrheed.log          Written next to the exe at run time (macOS app: ~/Library/Logs/VRHEED)
 ```
 
 ## Cameras
@@ -123,6 +123,17 @@ the Source box when you connect:
 On macOS, the USB and screen-capture backends need camera and screen-recording
 permission in *System Settings ▸ Privacy & Security*.
 
+The macOS release apps are not notarized (no Apple Developer ID), so a copy
+downloaded from GitHub is quarantined and macOS may say it "is damaged and
+can't be opened".  It is not damaged.  Unzip it, move it where you want it,
+and clear the quarantine flag once:
+
+    xattr -cr /Applications/VRHEED.app
+
+(2.2.0's mac zips were also genuinely mis-signed — the CI smoke test wrote
+`vrheed.log` inside the bundle.  Builds after 2.2.0 keep the log in
+`~/Library/Logs/VRHEED` and CI checks the signature before release.)
+
 ### Starting VRHEED on a machine with several Pythons
 
 PySpin is not on PyPI: it is a wheel built for one Python version, so on a PC
@@ -179,7 +190,7 @@ the camera used last session.
 escapes a slot or timer callback and `sys.excepthook` is still the default —
 one malformed frame used to end a growth run with no trace. The hook is now
 replaced: unhandled exceptions are written with a full traceback to a rotating
-`vrheed.log` (1 MB × 3) next to the executable and shown briefly in the status
+`vrheed.log` (1 MB × 3) next to the executable (on macOS, in `~/Library/Logs/VRHEED`) and shown briefly in the status
 bar, and the app carries on. The frame pipeline additionally catches its own
 errors and logs each distinct one once, so a fault that recurs at 60 Hz cannot
 fill the log in seconds. *Settings ▸ Open log file location* tells you where
