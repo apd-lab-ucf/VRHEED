@@ -913,6 +913,7 @@ class VRHEED_App(QMainWindow):
         self.fps_spin = QDoubleSpinBox()
         self.fps_spin.setRange(1, 200); self.fps_spin.setValue(30.0)
         self.fps_spin.setFixedWidth(65)
+        self.fps_spin.setKeyboardTracking(False)
         self.fps_spin.valueChanged.connect(self._on_target_fps)
         fb_row.addWidget(self.fps_spin)
         fb_row.addSpacing(8)
@@ -1162,6 +1163,10 @@ class VRHEED_App(QMainWindow):
         self.hist_spin.setRange(1, 240); self.hist_spin.setValue(30.0)
         self.hist_spin.setSingleStep(5); self.hist_spin.setDecimals(0)
         self.hist_spin.setFixedWidth(75)
+        # Shrinking the history discards samples for good, so never act on a
+        # half-typed number: "120" typed over "30" passes through "1", which
+        # used to trim every ROI's history to one minute.
+        self.hist_spin.setKeyboardTracking(False)
         self.hist_spin.setToolTip(
             "Maximum duration of data kept in memory.\n"
             "Existing ROI histories are resized when changed.")
@@ -1412,6 +1417,9 @@ class VRHEED_App(QMainWindow):
         sp.setSingleStep(1.0 / scale)
         sp.setDecimals(max(0, len(str(int(scale))) - 1))
         sp.setFixedWidth(75)
+        # Typed values apply on Enter / focus-out, not per keystroke: typing
+        # "150" must not send 1, then 15, then 150 to the camera mid-growth.
+        sp.setKeyboardTracking(False)
         grid.addWidget(sp, row, 2)
         return sl, sp
 
