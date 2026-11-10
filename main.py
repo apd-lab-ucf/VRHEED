@@ -31,7 +31,7 @@ import traceback
 from datetime import datetime
 from collections import deque
 
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 
 
 def _installed_backends():
